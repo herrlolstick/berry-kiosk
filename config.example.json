@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "profile": "home",
+  "display": {
+    "maxRender": "auto",
+    "rotation": 0
+  },
+  "media": {
+    "path": "media"
+  },
+  "activeLayout": "vollbild",
+  "layouts": [
+    {
+      "id": "vollbild",
+      "grid": { "columns": 12, "rows": 12 },
+      "regions": [
+        {
+          "id": "main",
+          "type": "slideshow",
+          "x": 0, "y": 0, "w": 12, "h": 12,
+          "album": "",
+          "order": "shuffle",
+          "interval": 20,
+          "fit": "cover",
+          "transition": { "type": "fade", "duration": 1500 }
+        }
+      ]
+    },
+    {
+      "id": "collage",
+      "grid": { "columns": 12, "rows": 12 },
+      "regions": [
+        {
+          "id": "gross",
+          "type": "slideshow",
+          "x": 0, "y": 0, "w": 8, "h": 12,
+          "order": "shuffle",
+          "interval": 25,
+          "transition": { "type": "fade", "duration": 2000 }
+        },
+        {
+          "id": "oben",
+          "type": "slideshow",
+          "x": 8, "y": 0, "w": 4, "h": 6,
+          "order": "shuffle",
+          "interval": 17,
+          "transition": { "type": "fade", "duration": 1200 }
+        },
+        {
+          "id": "unten",
+          "type": "slideshow",
+          "x": 8, "y": 6, "w": 4, "h": 6,
+          "order": "shuffle",
+          "interval": 23,
+          "transition": { "type": "fade", "duration": 1200 }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+build*/
+/media/
+/config.json
+*.user
+CMakeLists.txt.user*
+.qtcreator/
+.vscode/
+.DS_Store
+._*
