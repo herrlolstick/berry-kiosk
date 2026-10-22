@@ -11,6 +11,7 @@ set(berry_qml_files
     qml/Main.qml
     qml/LayoutView.qml
     qml/SlideshowRegion.qml
+    qml/SlideSlot.qml
     qml/DebugOverlay.qml
     qml/WidgetPanel.qml
     qml/ClockWidget.qml

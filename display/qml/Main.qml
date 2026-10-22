@@ -25,9 +25,38 @@ Window {
         height: portrait ? parent.width : parent.height
         rotation: window.kiosk.rotation
 
+        // Layout on screen; switches go through a short fade to black
+        property var shownLayout: window.kiosk.layout
+
         LayoutView {
             anchors.fill: parent
             kiosk: window.kiosk
+            layout: canvas.shownLayout
+        }
+
+        Rectangle {
+            id: curtain
+
+            anchors.fill: parent
+            color: "black"
+            opacity: 0
+            z: 10
+        }
+
+        SequentialAnimation {
+            id: layoutSwitch
+
+            NumberAnimation { target: curtain; property: "opacity"; to: 1; duration: 400; easing.type: Easing.InQuad }
+            ScriptAction { script: canvas.shownLayout = window.kiosk.layout }
+            NumberAnimation { target: curtain; property: "opacity"; to: 0; duration: 600; easing.type: Easing.OutQuad }
+        }
+
+        Connections {
+            target: window.kiosk
+
+            function onLayoutChanged() {
+                layoutSwitch.restart()
+            }
         }
 
         DebugOverlay {

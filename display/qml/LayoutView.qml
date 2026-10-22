@@ -7,8 +7,7 @@ Item {
     id: view
 
     required property KioskController kiosk
-
-    readonly property var layout: kiosk.layout
+    required property var layout
     readonly property var regions: layout.regions ?? []
     readonly property int columns: Math.max(1, layout.grid?.columns ?? 12)
     readonly property int rows: Math.max(1, layout.grid?.rows ?? 12)

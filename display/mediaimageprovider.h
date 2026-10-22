@@ -2,7 +2,8 @@
 
 #include <QQuickImageProvider>
 
-// Serves "image://media/<cover|contain>/<percent-encoded absolute path>".
+// Serves "image://media/<cover|contain|backdrop>/<percent-encoded absolute path>".
+// "backdrop" is a tiny blurred version for the bars around "contain" pictures.
 // Decodes JPEGs straight to the size they are shown at (the decoder scales
 // while reading, which keeps memory low on small boards) and caps every image
 // at the GPU's texture limit.
