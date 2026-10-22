@@ -15,7 +15,7 @@ echo "==> Pakete installieren"
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
     build-essential cmake ninja-build \
-    qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools qt6-httpserver-dev \
+    qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools qt6-httpserver-dev qt6-websockets-dev \
     qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript \
     qt6-qpa-plugins qt6-image-formats-plugins libqt6sql6-sqlite libexiv2-dev libgl-dev libegl-dev \
     fonts-dejavu-core
