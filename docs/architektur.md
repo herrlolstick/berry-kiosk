@@ -26,7 +26,7 @@
 Zwei getrennte Prozesse: Stürzt die Verwaltung ab oder verarbeitet sie gerade viele
 Uploads, läuft die Diashow ungestört weiter. Beide teilen sich `libberrycore`.
 
-Stand Meilenstein 5: In `berry-kiosk-admin` läuft die Web-API (`QHttpServer`,
+Stand Meilenstein 7: In `berry-kiosk-admin` läuft die Web-API (`QHttpServer`,
 `admin/apiserver.*`) im Hauptthread, Abgleich und Varianten (`core/library.*`,
 `core/renditions.*`) in einem eigenen Thread, Bild für Bild, damit neue
 Abgleich-Anfragen dazwischenkommen. Die API liest die Mediathek nur lesend; ihre
@@ -43,6 +43,15 @@ Ereignis „Bild gezeigt“. Daneben bleiben die JSON-Dateien in `state/`
 Die Anzeige liest die Mediathek nur lesend (SQLite im WAL-Modus) und fällt auf den
 Ordner zurück, solange es keine gibt. Widgets folgen einer Diashow-Region über deren
 `shown`-Signal; `LayoutView` merkt sich das aktuelle Bild je Region.
+
+Seit Meilenstein 6/7: Der Layout-Editor schickt ungespeicherte Layouts über
+`POST /api/display/preview` und den Socket-Befehl `preview` an die Anzeige.
+`KioskController::updateLayout()` wählt Vorschau vor Zeitplan vor `activeLayout`;
+`Main.qml` blendet Layoutwechsel über Schwarz. `SlideshowRegion` steuert Übergänge
+über einen Fortschrittswert (fade, slide-*, zoom, kenburns, mix), misst die Bildrate
+und fällt nach zwei Übergängen unter 20 fps auf Überblenden zurück. `SlideSlot` hält
+ein Bild samt Ken-Burns-Bewegung und, bei `contain`, einen unscharfen Hintergrund aus
+einem winzigen Decode (`image://media/backdrop/…`), den die GPU hochskaliert.
 
 Die Web-Oberfläche (`admin/www/`) ist reines JavaScript mit ES-Modulen und CSS, ohne
 Build-Schritt und ohne npm-Abhängigkeiten, als Qt-Ressourcen in den Admin-Dienst
@@ -89,11 +98,12 @@ npm-Abhängigkeiten. Ausgeliefert vom Admin-Server:
 - **Hochladen** – Drag & Drop auch ganzer Ordner, Warteschlange mit Fortschritt
 - **Alben** – Baum mit Covern, anlegen, umbenennen/verschieben, löschen (Papierkorb)
 - **Einstellungen** – Passwort, Sprache, Auflösung, Drehung, Varianten, Upload-Größe
+- **Layouts** – Raster-Editor (Ziehen, Größe ändern, Vorlagen, Rückgängig, Tastatur),
+  Eigenschaften und Übergang pro Region, „Auf Kiosk vorschauen“ mit Bildschirmfoto,
+  Aktivieren, Zitate bearbeiten (`js/view-layouts.js`, `js/layout-editor.js`,
+  `js/layout-model.js`, `js/layout-quotes.js`)
 
 Noch offen:
 
-- **Raster-Editor** (Meilenstein 6) – Regionen per Drag & Drop, Eigenschaften pro
-  Region, „Auf Kiosk vorschauen“ und „Aktivieren“
-- **Animationen** – Übergänge global und pro Region
 - **Zeitplan** – Layout je Uhrzeit, Bildschirm aus
 - **Profil** `home`/`public`

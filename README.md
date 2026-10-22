@@ -5,14 +5,14 @@ photography in a living room or a public space. It runs without a desktop,
 straight on the screen (Qt Quick via eglfs/KMS), works on low-cost boards like
 the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 
-> **Status:** milestone 5 – slideshow, widgets, media library, image pipeline,
-> admin web API and the web UI for pictures and uploads. The grid editor is next, see
-> the [roadmap](#roadmap).
+> **Status:** milestone 7 – slideshow with transitions, widgets, media library,
+> image pipeline, admin web API and the web UI incl. the layout editor. Operations
+> (schedule, screen off, public profile) are next, see the [roadmap](#roadmap).
 
 ## Features
 
-- Slideshow from a folder (sub folders are albums), sequential or shuffled, with cross-fades
-- **Grid layouts:** regions are placed on grid cells, e.g. one large picture and two small ones (collage)
+- Slideshow from a folder (sub folders are albums), sequential or shuffled, with transitions: fade, slide, zoom, Ken Burns or a random mix – falling back to fades on boards that cannot keep up
+- **Grid layouts:** regions are placed on grid cells, e.g. one large picture and two small ones (collage), edited in the browser with a live preview on the kiosk
 - **Widgets:** clock, image info (title, location, date, camera settings from EXIF/IPTC/XMP) and quotes
 - **4K with automatic fallback to Full HD** (see below)
 - **Media library** (SQLite) with prepared 1080p/2160p renditions and thumbnails, kept up to date in the background
@@ -89,6 +89,7 @@ binary) on port 8080: open `http://<pi>.local:8080/`.
 | Mediathek | Grid with infinite scroll; filter by album, search, shown/hidden, sort; select pictures to show, hide, move or delete them; detail view with a large preview, metadata and editing of title, location, description, quote and "in der Diashow zeigen", arrow keys and swipe for the next picture |
 | Hochladen | Drop zone for files and whole folders (sub folders become sub albums), queue with progress and retries; one file at a time, as the server holds an upload in memory |
 | Alben | Album tree with covers and counts: create, rename/move, delete (to the trash) |
+| Layouts | Grid editor: drag and resize regions on the grid, templates (full screen, with clock and image info, collage, portrait pair), properties per region (album, order, interval, fit, transition; widget style), undo/redo, keyboard (arrows move, Shift+arrows resize, Delete removes); "Auf Kiosk vorschauen" shows the unsaved layout on the kiosk for 60 s and fetches a screenshot; activate a layout; a "Zitate" tab for the global quotes |
 | Einstellungen | Change the password; language, maximum resolution, rotation, renditions, JPEG quality, maximum upload size |
 
 It is plain ES modules and CSS – no build step and no npm dependencies, so the Pi
@@ -176,6 +177,8 @@ All under `/api`, JSON in and out, errors as `{ "error": "…" }`.
 | `PUT` | `/config` | Validated; the previous version is kept as `config.json.bak` |
 | `POST` | `/display/next`, `/display/pause`, `/display/resume` | Remote control |
 | `GET` | `/display/screenshot?maxWidth=` | Live screenshot (JPEG) |
+| `POST` | `/display/preview` | `{ "layout", "seconds" }` (1–600, default 60): show an unsaved layout on the kiosk for a while, checked like a saved one |
+| `DELETE` | `/display/preview` | End the preview now |
 | `POST` | `/library/sync` | Sync the library now |
 
 The web UI itself is served from `/`, `/js/`, `/css/` and `/assets/`.
@@ -256,6 +259,7 @@ See [`config.example.json`](config.example.json). Top level:
 | `admin.maxUploadMB` | Largest upload in MB, default `64` |
 | `quotes` | Global quotes: `[{ "text": "…", "author": "…" }]` or plain strings |
 | `activeLayout` | `id` of the layout to show |
+| `layouts[].name` | Display name in the web UI (optional; `id` stays stable) |
 | `layouts[].grid` | Grid size, e.g. `{ "columns": 12, "rows": 12 }` |
 | `layouts[].regions[]` | Regions: `type`, position `x`/`y` and size `w`/`h` in grid cells, optional `id` and `z` |
 
@@ -267,8 +271,17 @@ See [`config.example.json`](config.example.json). Top level:
 | `order` | `"sequential"`, `"shuffle"` | `"sequential"` |
 | `interval` | Seconds per picture | `15` |
 | `fit` | `"cover"` (fill), `"contain"` (show whole picture) | `"cover"` |
-| `transition.type` | `"fade"`, `"none"` | `"fade"` |
+| `transition.type` | `"fade"`, `"slide-left"`, `"slide-right"`, `"slide-up"`, `"slide-down"`, `"zoom"`, `"kenburns"` (fade plus a slow zoom and pan while the picture shows), `"mix"` (a random fade, slide or zoom each time), `"none"` | `"fade"` |
 | `transition.duration` | Milliseconds | `1200` |
+| `backdrop` | With `fit: "contain"`: fill the bars with a blurred copy of the picture | `true` |
+
+If two transitions in a row run below 20 frames per second, the region switches to
+plain fades for the rest of its life – the show stays smooth on a Pi Zero. The
+blurred backdrop is a tiny decode that the GPU scales up, so it costs next to nothing.
+
+The display shows the preview layout from the editor first, then the layout the
+schedule asks for (milestone 8), then `activeLayout`. Switching layouts fades
+through black.
 
 ### `clock`
 
@@ -355,8 +368,8 @@ docs/        architecture and planning (German)
 3. ✅ **Media library** – SQLite index, image pipeline with 1080p/2160p renditions and thumbnails
 4. ✅ **Admin server** – REST API, login, uploads, metadata editing, remote control of the display
 5. ✅ **Web UI I** – media library, uploads, albums and settings; moved files keep their renditions
-6. **Web UI II** – grid editor with live preview on the kiosk, animation settings
-7. **Transitions** – slide, Ken Burns, shader effects with fallbacks for weaker GPUs
+6. ✅ **Web UI II** – layout editor with preview on the kiosk, transition settings, quotes
+7. ✅ **Transitions** – slide, zoom, Ken Burns, mix, blurred backdrop, automatic fallback to fades
 8. **Operations** – schedule, screen off (DPMS/CEC), public profile, read-only root, watchdog, HDMI hotplug
 9. **Distribution** – `.deb` packages and a ready-made SD card image
 

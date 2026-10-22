@@ -207,6 +207,7 @@ private slots:
     void albums();
     void config();
     void displayOffline();
+    void previewLayout();
     void mediaFilters();
     void albumCovers();
     void batch();
@@ -593,6 +594,44 @@ void TestApi::displayOffline()
     QCOMPARE(status.object().value(u"display").toObject().value(u"connected").toBool(true), false);
     QVERIFY(status.object().value(u"storage").toObject().value(u"total").toDouble() > 0);
     QVERIFY(!status.object().value(u"version").toString().isEmpty());
+}
+
+void TestApi::previewLayout()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    const QJsonObject layout{
+        {QStringLiteral("id"), QStringLiteral("probe")},
+        {QStringLiteral("grid"), QJsonObject{{QStringLiteral("columns"), 12}, {QStringLiteral("rows"), 12}}},
+        {QStringLiteral("regions"), QJsonArray{QJsonObject{
+             {QStringLiteral("id"), QStringLiteral("main")}, {QStringLiteral("type"), QStringLiteral("slideshow")},
+             {QStringLiteral("x"), 0}, {QStringLiteral("y"), 0}, {QStringLiteral("w"), 12}, {QStringLiteral("h"), 12}}}},
+    };
+    const auto body = [](const QJsonObject &object) { return QJsonDocument(object).toJson(QJsonDocument::Compact); };
+    const QByteArray valid = body({{QStringLiteral("layout"), layout}, {QStringLiteral("seconds"), 30}});
+
+    // No session yet
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/preview"), valid).status, 401);
+
+    QVERIFY(env->login());
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/preview"), valid, {}, false).status, 403);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/preview"), body({})).status, 400);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/preview"),
+                          body({{QStringLiteral("layout"), QStringLiteral("vollbild")}})).status, 400);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/preview"), QByteArray("{kaputt")).status, 400);
+
+    QJsonObject untyped = layout;
+    untyped.insert(QStringLiteral("regions"), QJsonArray{QJsonObject{{QStringLiteral("id"), QStringLiteral("x")}}});
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/preview"),
+                          body({{QStringLiteral("layout"), untyped}})).status, 400);
+
+    // Valid, but no display to show it on
+    const Response offline = env->request("POST", QStringLiteral("/api/display/preview"), valid);
+    QCOMPARE(offline.status, 503);
+    QVERIFY(!offline.object().value(u"error").toString().isEmpty());
+
+    QCOMPARE(env->request("DELETE", QStringLiteral("/api/display/preview"), {}, {}, false).status, 403);
+    QCOMPARE(env->request("DELETE", QStringLiteral("/api/display/preview")).status, 503);
 }
 
 void TestApi::mediaFilters()

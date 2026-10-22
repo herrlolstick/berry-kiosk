@@ -31,6 +31,7 @@ private slots:
     void configDefaults();
     void configDisplay();
     void configActiveLayout();
+    void configLayoutById();
     void configLoadFailure();
     void scanImages();
     void configLocaleAndQuotes();
@@ -183,6 +184,20 @@ void TestCore::configActiveLayout()
     QCOMPARE(active(QStringLiteral("abend")), QStringLiteral("abend"));
     QCOMPARE(active(QStringLiteral("gibt-es-nicht")), QStringLiteral("tag"));
     QCOMPARE(active(QString()), QStringLiteral("tag"));
+}
+
+void TestCore::configLayoutById()
+{
+    const QJsonArray layouts{
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("tag")}, {QStringLiteral("name"), QStringLiteral("Tag")}},
+        QJsonObject{{QStringLiteral("id"), QStringLiteral("abend")}},
+    };
+    const Config config = Config::fromJson(QJsonObject{{QStringLiteral("layouts"), layouts}}, QStringLiteral("/"));
+    QCOMPARE(config.layoutById(QStringLiteral("abend")).value(u"id").toString(), QStringLiteral("abend"));
+    QCOMPARE(config.layoutById(QStringLiteral("tag")).value(u"name").toString(), QStringLiteral("Tag"));
+    QVERIFY(config.layoutById(QStringLiteral("nacht")).isEmpty());
+    QVERIFY(config.layoutById(QString()).isEmpty());
+    QVERIFY(Config::fromJson({}, QStringLiteral("/")).layoutById(QStringLiteral("default")).isEmpty());
 }
 
 void TestCore::configLoadFailure()
