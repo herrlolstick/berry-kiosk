@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     container: debian:trixie
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Pakete installieren
         run: |
@@ -34,7 +34,7 @@ jobs:
     name: macOS (Entwicklung)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Pakete installieren
         run: brew install qt ninja
