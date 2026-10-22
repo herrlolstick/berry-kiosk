@@ -29,6 +29,6 @@ qt_add_qml_module(berry-kiosk-display
 )
 
 target_compile_definitions(berry-kiosk-display PRIVATE BERRY_KIOSK_VERSION="${PROJECT_VERSION}")
-target_link_libraries(berry-kiosk-display PRIVATE berrycore Qt6::Gui Qt6::Quick)
+target_link_libraries(berry-kiosk-display PRIVATE berrycore Qt6::Gui Qt6::Quick Qt6::Sql)
 
 install(TARGETS berry-kiosk-display RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

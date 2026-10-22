@@ -1,0 +1,22 @@
+[Unit]
+Description=berry-kiosk Mediathek und Bildvarianten
+Documentation=https://github.com/herrlolstick/berry-kiosk
+After=network-online.target local-fs.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=berry-kiosk
+Group=berry-kiosk
+StateDirectory=berry-kiosk
+ExecStart=/usr/local/bin/berry-kiosk-admin --config /var/lib/berry-kiosk/config.json
+Restart=on-failure
+RestartSec=5
+
+# Rendering pictures must never make the slideshow stutter
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+
+[Install]
+WantedBy=multi-user.target

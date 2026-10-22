@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 
 namespace berry {
 
@@ -12,6 +13,15 @@ struct DisplaySettings
 {
     MaxRender maxRender = MaxRender::Uhd2160;
     int rotation = 0; // 0, 90, 180 or 270
+};
+
+struct LibrarySettings
+{
+    QString database;       // absolute
+    QString cacheRoot;      // absolute; renditions live in <cacheRoot>/<kind>/
+    QString stateDir;       // absolute
+    QStringList renditions; // tiers to prepare ("1080p", "2160p"); empty = the one the display uses
+    int jpegQuality = 88;
 };
 
 // Read-only view on config.json. Missing values fall back to defaults so a
@@ -26,6 +36,7 @@ public:
     const QJsonObject &json() const { return m_json; }
     DisplaySettings display() const;
     QString mediaRoot() const;      // absolute; relative paths resolve against the config file
+    LibrarySettings library() const; // paths resolve like mediaRoot
     QJsonObject activeLayout() const; // falls back to one full-screen slideshow
     QString locale() const;           // for dates and numbers, e.g. "de_DE"
     QJsonArray quotes() const;        // [{ "text", "author" }], plain strings are accepted too

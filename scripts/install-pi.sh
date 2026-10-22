@@ -17,7 +17,7 @@ sudo apt-get install -y --no-install-recommends \
     build-essential cmake ninja-build \
     qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools \
     qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript \
-    qt6-qpa-plugins qt6-image-formats-plugins libexiv2-dev libgl-dev libegl-dev \
+    qt6-qpa-plugins qt6-image-formats-plugins libqt6sql6-sqlite libexiv2-dev libgl-dev libegl-dev \
     fonts-dejavu-core
 
 echo "==> Bauen"
@@ -38,12 +38,15 @@ if [ ! -f "$STATE_DIR/config.json" ]; then
     sudo install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0644 "$REPO_DIR/config.example.json" "$STATE_DIR/config.json"
 fi
 
-echo "==> Dienst einrichten"
-sudo install -m 0644 "$REPO_DIR/packaging/systemd/berry-kiosk-display.service" /etc/systemd/system/
+echo "==> Dienste einrichten"
+for service in berry-kiosk-admin berry-kiosk-display; do
+    sudo install -m 0644 "$REPO_DIR/packaging/systemd/$service.service" /etc/systemd/system/
+done
 sudo systemctl daemon-reload
-sudo systemctl enable --now berry-kiosk-display.service
+sudo systemctl enable berry-kiosk-admin.service berry-kiosk-display.service
+sudo systemctl restart berry-kiosk-admin.service berry-kiosk-display.service
 
 echo
 echo "Fertig. Nach dem nächsten Login darf $USER Bilder nach $STATE_DIR/media kopieren, z. B. vom Mac:"
 echo "  rsync -av ~/Bilder/Natur/ $USER@$(hostname).local:$STATE_DIR/media/"
-echo "Logs: journalctl -u berry-kiosk-display -f"
+echo "Logs: journalctl -u berry-kiosk-display -u berry-kiosk-admin -f"

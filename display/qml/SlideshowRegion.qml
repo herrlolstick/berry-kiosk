@@ -6,9 +6,9 @@ import BerryKiosk
 Item {
     id: slideshow
 
+    required property KioskController kiosk
     property var config: ({})
-    property string mediaRoot
-    property size renderSize: Qt.size(1920, 1080)
+    readonly property size renderSize: kiosk.renderSize
 
     readonly property int interval: Math.max(1, config.interval ?? 15) * 1000
     readonly property string transitionType: config.transition?.type ?? "fade"
@@ -39,15 +39,15 @@ Item {
     onCanRunChanged: if (canRun && !started) advance()
 
     function advance() {
-        const path = media.next()
-        if (path === "" || !canRun) {
+        const entry = media.next()
+        if (!entry.source || !canRun) {
             started = false
             return
         }
         started = true
         pending = current === slotA ? slotB : slotA
-        pendingPath = path
-        pending.source = "image://media/" + (cover ? "cover" : "contain") + "/" + encodeURIComponent(path)
+        pendingPath = entry.original
+        pending.source = "image://media/" + (cover ? "cover" : "contain") + "/" + encodeURIComponent(entry.source)
         if (pending.status === Image.Ready)
             reveal()
     }
@@ -94,7 +94,11 @@ Item {
     MediaSource {
         id: media
 
-        root: slideshow.mediaRoot
+        root: slideshow.kiosk.mediaRoot
+        database: slideshow.kiosk.libraryDatabase
+        cacheRoot: slideshow.kiosk.cacheRoot
+        stateDir: slideshow.kiosk.stateDir
+        tier: slideshow.kiosk.renderTier
         album: slideshow.config.album ?? ""
         order: slideshow.config.order ?? "sequential"
     }
@@ -159,6 +163,6 @@ Item {
         wrapMode: Text.Wrap
         color: "#888888"
         font.pixelSize: Math.max(14, Math.round(slideshow.height / 30))
-        text: qsTr("Keine Bilder in\n%1").arg(media.directory || slideshow.mediaRoot)
+        text: qsTr("Keine Bilder in\n%1").arg(media.directory || slideshow.kiosk.mediaRoot)
     }
 }

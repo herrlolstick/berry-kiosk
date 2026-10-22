@@ -21,6 +21,9 @@ class KioskController : public QObject
 
     Q_PROPERTY(QVariantMap layout READ layout NOTIFY configChanged)
     Q_PROPERTY(QString mediaRoot READ mediaRoot NOTIFY configChanged)
+    Q_PROPERTY(QString libraryDatabase READ libraryDatabase NOTIFY configChanged)
+    Q_PROPERTY(QString cacheRoot READ cacheRoot NOTIFY configChanged)
+    Q_PROPERTY(QString stateDir READ stateDir NOTIFY configChanged)
     Q_PROPERTY(int rotation READ rotation NOTIFY configChanged)
     Q_PROPERTY(QString locale READ locale NOTIFY configChanged)
     Q_PROPERTY(QVariantList quotes READ quotes NOTIFY configChanged)
@@ -48,6 +51,9 @@ public:
 
     QVariantMap layout() const { return m_layout; }
     QString mediaRoot() const { return m_config.mediaRoot(); }
+    QString libraryDatabase() const { return m_config.library().database; }
+    QString cacheRoot() const { return m_config.library().cacheRoot; }
+    QString stateDir() const { return m_config.library().stateDir; }
     int rotation() const { return m_config.display().rotation; }
     QString locale() const { return m_config.locale(); }
     QVariantList quotes() const { return m_config.quotes().toVariantList(); }
@@ -67,6 +73,7 @@ private:
     void reloadConfig();
     void updateRender();
     void watchConfigFile();
+    void writeDisplayState();
 
     Options m_options;
     berry::Config m_config;

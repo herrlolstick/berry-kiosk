@@ -80,6 +80,33 @@ QString Config::mediaRoot() const
     return QDir::cleanPath(QDir(m_baseDir).absoluteFilePath(path));
 }
 
+LibrarySettings Config::library() const
+{
+    const QJsonObject library = m_json.value(u"library").toObject();
+    const auto resolve = [&](QStringView key, const QString &fallback) {
+        return QDir::cleanPath(QDir(m_baseDir).absoluteFilePath(library.value(key).toString(fallback)));
+    };
+
+    LibrarySettings settings;
+    settings.database = resolve(u"database", QStringLiteral("library.db"));
+    settings.cacheRoot = resolve(u"cache", QStringLiteral("cache"));
+    settings.stateDir = resolve(u"state", QStringLiteral("state"));
+    settings.jpegQuality = qBound(50, library.value(u"jpegQuality").toInt(88), 100);
+
+    // "auto" (or nothing) leaves the choice to the display's render tier
+    for (const QJsonValue &value : library.value(u"renditions").toArray()) {
+        const QString tier = value.toString().trimmed().toLower();
+        QString name;
+        if (tier == u"1080p" || tier == u"1080" || tier == u"hd")
+            name = tierName(RenderTier::Hd1080);
+        else if (tier == u"2160p" || tier == u"2160" || tier == u"4k" || tier == u"uhd")
+            name = tierName(RenderTier::Uhd2160);
+        if (!name.isEmpty() && !settings.renditions.contains(name))
+            settings.renditions.append(name);
+    }
+    return settings;
+}
+
 QJsonObject Config::activeLayout() const
 {
     const QJsonArray layouts = m_json.value(u"layouts").toArray();

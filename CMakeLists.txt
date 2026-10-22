@@ -12,7 +12,7 @@ option(BERRY_BUILD_TESTS "Build the unit tests" ON)
 
 # Qt 6.5 is the oldest version with qt_add_qml_module/loadFromModule as used here.
 # Raspberry Pi OS based on Debian 13 (trixie) ships Qt 6.8.
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick Sql)
 qt_standard_project_setup(REQUIRES 6.5)
 
 # Exiv2 reads EXIF/IPTC/XMP. Debian ships a CMake package, fall back to pkg-config.
@@ -27,6 +27,7 @@ endif()
 
 add_subdirectory(core)
 add_subdirectory(display)
+add_subdirectory(admin)
 
 if(BERRY_BUILD_TESTS)
     enable_testing()

@@ -1,8 +1,12 @@
 #include "kioskcontroller.h"
 
+#include "state.h"
+
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QScreen>
 #include <QSysInfo>
 
@@ -56,6 +60,7 @@ void KioskController::reloadConfig()
 
     emit configChanged();
     updateRender();
+    writeDisplayState(); // the state directory may have moved
 }
 
 void KioskController::updateRender()
@@ -84,6 +89,30 @@ void KioskController::updateRender()
                              .arg(decision.renderSize.height())
                              .arg(decision.reason);
     emit renderChanged();
+    writeDisplayState();
+}
+
+// Tells the admin service which renditions this display needs
+void KioskController::writeDisplayState()
+{
+    if (!m_renderDecided)
+        return;
+    const QJsonObject state{
+        {QStringLiteral("renderTier"), renderTier()},
+        {QStringLiteral("renderSize"), QJsonArray{m_render.renderSize.width(), m_render.renderSize.height()}},
+        {QStringLiteral("screenSize"), QJsonArray{m_screenSize.width(), m_screenSize.height()}},
+        {QStringLiteral("rotation"), rotation()},
+        {QStringLiteral("maxTextureSize"), m_options.maxTextureSize},
+        {QStringLiteral("device"), deviceModel()},
+        {QStringLiteral("version"), QCoreApplication::applicationVersion()},
+    };
+    const QString path = berry::displayStatePath(stateDir());
+    // Unchanged content keeps the file untouched, so the admin is not woken up for nothing
+    if (berry::readJsonFile(path) == state)
+        return;
+    QString error;
+    if (!berry::writeJsonFile(path, state, &error))
+        qWarning().noquote() << "Anzeigestatus nicht schreibbar:" << path << error;
 }
 
 void KioskController::watchConfigFile()

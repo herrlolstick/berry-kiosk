@@ -5,8 +5,8 @@ photography in a living room or a public space. It runs without a desktop,
 straight on the screen (Qt Quick via eglfs/KMS), works on low-cost boards like
 the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 
-> **Status:** milestone 2 – slideshow and widgets. The web admin interface and
-> the image pipeline are next, see the [roadmap](#roadmap).
+> **Status:** milestone 3 – slideshow, widgets, media library and image
+> pipeline. The web admin interface is next, see the [roadmap](#roadmap).
 
 ## Features
 
@@ -14,6 +14,7 @@ the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 - **Grid layouts:** regions are placed on grid cells, e.g. one large picture and two small ones (collage)
 - **Widgets:** clock, image info (title, location, date, camera settings from EXIF/IPTC/XMP) and quotes
 - **4K with automatic fallback to Full HD** (see below)
+- **Media library** (SQLite) with prepared 1080p/2160p renditions and thumbnails, kept up to date in the background
 - Images are decoded straight to their display size – even 24 MP JPEGs run on boards with 512 MB RAM
 - EXIF orientation, portrait screens (`rotation`), panoramas are capped at the GPU texture limit
 - `config.json` is reloaded while running
@@ -33,10 +34,45 @@ At startup the display picks a **render tier** from three values – the smalles
 - **Pi 4:** 4K at 30 Hz (ideal for still images), **Pi 5:** 4K at 60 Hz.
 - Layouts are described in grid cells, not pixels – the same configuration works on both tiers.
 
+## Media library and renditions
+
+The media folder stays the source of truth: copy pictures in (rsync, Samba, a USB
+stick, later the web UI) and organise them in sub folders, which are albums.
+The service `berry-kiosk-admin` keeps an index of them in `library.db` and
+prepares renditions in the background:
+
+| Rendition | Size | Used by |
+|---|---|---|
+| `1080p` | covers 1920 × 1920, at most 2048 px | displays rendering at 1080p |
+| `2160p` | covers 3840 × 3840, at most 4096 px | displays rendering at 4K |
+| `thumb` | fits into 512 × 512 | the admin UI |
+
+- Only the tier the display actually uses is prepared (`library.renditions: "auto"`):
+  the display reports its tier in `state/display.json`.
+- The display always picks the best file it has: its own tier, else the other
+  tier, else the original. Switching to a 4K screen therefore works right away
+  and gets sharper as the 2160p renditions come in.
+- Renditions are upright (EXIF orientation applied), newest pictures are done first,
+  and broken files are skipped without being retried until they change.
+- Without a library (admin service not running) the display reads the folder directly.
+- The admin service runs with low CPU and I/O priority, so the slideshow never stutters.
+
+Data layout, all relative to the configuration file by default:
+
+```
+config.json
+media/          your pictures (sub folders = albums, sidecar .json files next to them)
+library.db      index and metadata (SQLite, WAL)
+cache/1080p/    renditions per tier, <id>.jpg
+cache/2160p/
+cache/thumb/
+state/          display.json and library.json – how display and admin service talk
+```
+
 ## Developing on macOS
 
 ```bash
-brew install qt exiv2 cmake ninja
+brew install qt exiv2 cmake ninja   # Qt includes the SQLite driver
 cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix exiv2)"
 cmake --build build
 ctest --test-dir build
@@ -52,6 +88,14 @@ build/display/berry-kiosk-display --config config.json --windowed --debug
 `Esc` quits (only in windowed or debug mode), `F1` toggles the overlay.
 `--snapshot <file>` saves a screenshot after `--snapshot-delay` seconds and exits.
 
+To build the library and the renditions, run the admin service next to it –
+continuously, or once:
+
+```bash
+build/admin/berry-kiosk-admin --config config.json          # watches media/ and keeps going
+build/admin/berry-kiosk-admin --config config.json --once   # sync, render, exit
+```
+
 ## Installing on a Raspberry Pi
 
 Requires **Raspberry Pi OS Lite, 64-bit, based on Debian 13 "trixie"** (Qt ≥ 6.5).
@@ -64,10 +108,11 @@ cd berry-kiosk
 
 The script builds on the Pi, creates the system user `berry-kiosk`, copies the
 example configuration to `/var/lib/berry-kiosk/config.json` and starts the
-`berry-kiosk-display` service. Pictures go into `/var/lib/berry-kiosk/media/`.
+services `berry-kiosk-display` and `berry-kiosk-admin`. Pictures go into
+`/var/lib/berry-kiosk/media/`.
 
 ```bash
-journalctl -u berry-kiosk-display -f     # logs
+journalctl -u berry-kiosk-display -u berry-kiosk-admin -f     # logs
 sudo systemctl restart berry-kiosk-display
 ```
 
@@ -83,6 +128,9 @@ See [`config.example.json`](config.example.json). Top level:
 | `display.maxRender` | `"auto"` (4K when possible) or `"1080p"` |
 | `display.rotation` | `0`, `90`, `180`, `270` – for screens mounted in portrait |
 | `media.path` | Picture folder, relative to the configuration file or absolute |
+| `library.renditions` | `"auto"` (the display's tier) or a list such as `["1080p", "2160p"]` |
+| `library.jpegQuality` | JPEG quality of renditions, `50` … `100`, default `88` |
+| `library.database`, `library.cache`, `library.state` | Paths, default `library.db`, `cache`, `state` – e.g. put the cache on a USB drive |
 | `quotes` | Global quotes: `[{ "text": "…", "author": "…" }]` or plain strings |
 | `activeLayout` | `id` of the layout to show |
 | `layouts[].grid` | Grid size, e.g. `{ "columns": 12, "rows": 12 }` |
@@ -166,8 +214,9 @@ An empty string hides a value that is embedded in the picture.
 ## Project layout
 
 ```
-core/        libberrycore: configuration, render tier, device detection, image scanning, metadata
+core/        libberrycore: configuration, render tier, metadata, media library, renditions
 display/     berry-kiosk-display: the Qt Quick display (C++ and QML)
+admin/       berry-kiosk-admin: library sync and renditions (web API to come)
 tests/       unit tests for core
 packaging/   systemd units
 scripts/     install script for the Pi
@@ -178,7 +227,7 @@ docs/        architecture and planning (German)
 
 1. ✅ **Foundation** – slideshow, grid layouts, 4K/1080p detection, systemd
 2. ✅ **Widgets** – clock, image info (EXIF/IPTC/XMP), quotes (sidecar or global list)
-3. **Core** – media library (SQLite), image pipeline with 1080p/2160p renditions
+3. ✅ **Media library** – SQLite index, image pipeline with 1080p/2160p renditions and thumbnails
 4. **Admin server** – REST API, login, uploads, link to the display
 5. **Web UI I** – media library with uploads
 6. **Web UI II** – grid editor with live preview on the kiosk, animation settings

@@ -80,9 +80,8 @@ Item {
                 id: slideshowComponent
 
                 SlideshowRegion {
+                    kiosk: view.kiosk
                     config: region.modelData
-                    mediaRoot: view.kiosk.mediaRoot
-                    renderSize: view.kiosk.renderSize
                     onShown: path => view.setCurrentImage(region.regionId, path)
                 }
             }

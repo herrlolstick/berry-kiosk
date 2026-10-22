@@ -26,10 +26,15 @@
 Zwei getrennte Prozesse: Stürzt die Verwaltung ab oder verarbeitet sie gerade viele
 Uploads, läuft die Diashow ungestört weiter. Beide teilen sich `libberrycore`.
 
-Stand Meilenstein 2: nur `berry-kiosk-display` und der Teil von `libberrycore`, den
-die Anzeige braucht. Die Anzeige liest Bilder und Metadaten (Exiv2, Sidecar-JSON)
-noch direkt aus dem Medienordner. Widgets folgen einer Diashow-Region über deren
-`shown`-Signal; `LayoutView` merkt sich das aktuelle Bild je Region.
+Stand Meilenstein 3: `berry-kiosk-admin` gleicht die Mediathek (`core/library.*`) mit
+dem Bilderordner ab und erstellt Varianten (`core/renditions.*`) in einem eigenen
+Thread, Bild für Bild, damit neue Abgleich-Anfragen dazwischenkommen. Noch ohne
+Web-API und ohne Socket: Anzeige und Admin verständigen sich über kleine JSON-Dateien
+in `state/` (`display.json` mit der Render-Stufe, `library.json` mit einem
+Generationszähler). Die Anzeige liest die Mediathek nur lesend (SQLite im WAL-Modus)
+und fällt auf den Ordner zurück, solange es keine gibt. Widgets folgen einer
+Diashow-Region über deren `shown`-Signal; `LayoutView` merkt sich das aktuelle Bild
+je Region.
 
 ## Anzeige
 

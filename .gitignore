@@ -1,6 +1,9 @@
 build*/
 /media/
 /config.json
+/library.db*
+/cache/
+/state/
 *.user
 CMakeLists.txt.user*
 .qtcreator/

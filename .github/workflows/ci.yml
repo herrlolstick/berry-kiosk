@@ -20,7 +20,7 @@ jobs:
             build-essential cmake ninja-build \
             qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools \
             qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript \
-            libexiv2-dev libgl-dev libegl-dev
+            libqt6sql6-sqlite libexiv2-dev libgl-dev libegl-dev
 
       - name: Bauen
         run: |
