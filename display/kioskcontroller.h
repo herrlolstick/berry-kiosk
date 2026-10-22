@@ -22,6 +22,8 @@ class KioskController : public QObject
     Q_PROPERTY(QVariantMap layout READ layout NOTIFY configChanged)
     Q_PROPERTY(QString mediaRoot READ mediaRoot NOTIFY configChanged)
     Q_PROPERTY(int rotation READ rotation NOTIFY configChanged)
+    Q_PROPERTY(QString locale READ locale NOTIFY configChanged)
+    Q_PROPERTY(QVariantList quotes READ quotes NOTIFY configChanged)
     Q_PROPERTY(QString renderTier READ renderTier NOTIFY renderChanged)
     Q_PROPERTY(QSize renderSize READ renderSize NOTIFY renderChanged)
     Q_PROPERTY(QString renderReason READ renderReason NOTIFY renderChanged)
@@ -47,6 +49,8 @@ public:
     QVariantMap layout() const { return m_layout; }
     QString mediaRoot() const { return m_config.mediaRoot(); }
     int rotation() const { return m_config.display().rotation; }
+    QString locale() const { return m_config.locale(); }
+    QVariantList quotes() const { return m_config.quotes().toVariantList(); }
     QString renderTier() const { return berry::tierName(m_render.tier); }
     QSize renderSize() const { return m_render.renderSize; }
     QString renderReason() const { return m_render.reason; }

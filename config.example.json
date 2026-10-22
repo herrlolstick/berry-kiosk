@@ -1,6 +1,7 @@
 {
   "version": 1,
   "profile": "home",
+  "locale": "de_DE",
   "display": {
     "maxRender": "auto",
     "rotation": 0
@@ -8,6 +9,11 @@
   "media": {
     "path": "media"
   },
+  "quotes": [
+    { "text": "Die Natur ist das einzige Buch, das auf allen Blättern großen Inhalt bietet.", "author": "Johann Wolfgang von Goethe" },
+    { "text": "In every walk with nature one receives far more than he seeks.", "author": "John Muir" },
+    { "text": "Schau tief in die Natur, und dann wirst du alles besser verstehen.", "author": "Albert Einstein" }
+  ],
   "activeLayout": "vollbild",
   "layouts": [
     {
@@ -23,6 +29,30 @@
           "interval": 20,
           "fit": "cover",
           "transition": { "type": "fade", "duration": 1500 }
+        },
+        {
+          "id": "uhr",
+          "type": "clock",
+          "x": 9, "y": 0, "w": 3, "h": 2,
+          "format": "HH:mm",
+          "showDate": true,
+          "style": { "background": "none", "align": "right" }
+        },
+        {
+          "id": "bildinfo",
+          "type": "imageInfo",
+          "x": 0, "y": 10, "w": 5, "h": 2,
+          "follows": "main",
+          "fields": ["title", "location", "date"],
+          "style": { "background": "dark" }
+        },
+        {
+          "id": "zitat",
+          "type": "quote",
+          "x": 6, "y": 10, "w": 6, "h": 2,
+          "follows": "main",
+          "source": "image-or-global",
+          "style": { "background": "none", "align": "right" }
         }
       ]
     },
@@ -41,7 +71,7 @@
         {
           "id": "oben",
           "type": "slideshow",
-          "x": 8, "y": 0, "w": 4, "h": 6,
+          "x": 8, "y": 0, "w": 4, "h": 5,
           "order": "shuffle",
           "interval": 17,
           "transition": { "type": "fade", "duration": 1200 }
@@ -49,10 +79,24 @@
         {
           "id": "unten",
           "type": "slideshow",
-          "x": 8, "y": 6, "w": 4, "h": 6,
+          "x": 8, "y": 5, "w": 4, "h": 5,
           "order": "shuffle",
           "interval": 23,
           "transition": { "type": "fade", "duration": 1200 }
+        },
+        {
+          "id": "uhr",
+          "type": "clock",
+          "x": 8, "y": 10, "w": 4, "h": 2,
+          "style": { "background": "dark", "align": "center" }
+        },
+        {
+          "id": "bildinfo",
+          "type": "imageInfo",
+          "x": 0, "y": 10, "w": 5, "h": 2,
+          "follows": "gross",
+          "fields": ["title", "location", "camera", "exposure"],
+          "style": { "background": "dark" }
         }
       ]
     }

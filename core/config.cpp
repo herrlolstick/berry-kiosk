@@ -97,4 +97,21 @@ QJsonObject Config::activeLayout() const
     return defaultLayout();
 }
 
+QString Config::locale() const
+{
+    const QString locale = m_json.value(u"locale").toString().trimmed();
+    return locale.isEmpty() ? QStringLiteral("de_DE") : locale;
+}
+
+QJsonArray Config::quotes() const
+{
+    QJsonArray quotes;
+    for (const QJsonValue &value : m_json.value(u"quotes").toArray()) {
+        QJsonObject quote = value.isString() ? QJsonObject{{QStringLiteral("text"), value.toString()}} : value.toObject();
+        if (!quote.value(u"text").toString().trimmed().isEmpty())
+            quotes.append(quote);
+    }
+    return quotes;
+}
+
 } // namespace berry

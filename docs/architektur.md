@@ -26,8 +26,10 @@
 Zwei getrennte Prozesse: Stürzt die Verwaltung ab oder verarbeitet sie gerade viele
 Uploads, läuft die Diashow ungestört weiter. Beide teilen sich `libberrycore`.
 
-Stand Meilenstein 1: nur `berry-kiosk-display` und der Teil von `libberrycore`, den
-die Anzeige braucht. Die Anzeige liest Bilder noch direkt aus dem Medienordner.
+Stand Meilenstein 2: nur `berry-kiosk-display` und der Teil von `libberrycore`, den
+die Anzeige braucht. Die Anzeige liest Bilder und Metadaten (Exiv2, Sidecar-JSON)
+noch direkt aus dem Medienordner. Widgets folgen einer Diashow-Region über deren
+`shown`-Signal; `LayoutView` merkt sich das aktuelle Bild je Region.
 
 ## Anzeige
 

@@ -1,58 +1,60 @@
 # berry-kiosk
 
-Bilderrahmen und Kiosk-Anzeige für den Raspberry Pi – gebaut, um Naturfotografie
-im Wohnzimmer oder in öffentlichen Räumen zu zeigen. Läuft ohne Desktop direkt
-auf dem Bildschirm (Qt Quick über eglfs/KMS), auch auf günstigen Boards wie dem
-Pi Zero 2 W, und nutzt 4K, wo Bildschirm und Pi es können.
+A photo frame and kiosk display for the Raspberry Pi, built to show nature
+photography in a living room or a public space. It runs without a desktop,
+straight on the screen (Qt Quick via eglfs/KMS), works on low-cost boards like
+the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 
-> **Status:** Meilenstein 1 – Diashow-Grundgerüst. Widgets, Verwaltungswebsite
-> und Bild-Pipeline folgen, siehe [Fahrplan](#fahrplan).
+> **Status:** milestone 2 – slideshow and widgets. The web admin interface and
+> the image pipeline are next, see the [roadmap](#roadmap).
 
-## Was schon geht
+## Features
 
-- Diashow aus einem Ordner (Unterordner = Alben), nacheinander oder zufällig, mit Überblendung
-- **Raster-Layouts:** Bereiche werden in Rasterzellen platziert, z. B. ein großes Bild und zwei kleine (Collage)
-- **4K mit automatischem Rückfall auf Full HD** (siehe unten)
-- Bilder werden direkt in Anzeigegröße dekodiert – auch 24-MP-JPEGs laufen auf Boards mit 512 MB RAM
-- EXIF-Drehung, Hochformat-Bildschirme (`rotation`), Panoramen werden auf das GPU-Limit begrenzt
-- `config.json` wird im laufenden Betrieb neu geladen
-- Debug-Overlay (`--debug`, F1) mit Gerät, Render-Stufe und FPS
+- Slideshow from a folder (sub folders are albums), sequential or shuffled, with cross-fades
+- **Grid layouts:** regions are placed on grid cells, e.g. one large picture and two small ones (collage)
+- **Widgets:** clock, image info (title, location, date, camera settings from EXIF/IPTC/XMP) and quotes
+- **4K with automatic fallback to Full HD** (see below)
+- Images are decoded straight to their display size – even 24 MP JPEGs run on boards with 512 MB RAM
+- EXIF orientation, portrait screens (`rotation`), panoramas are capped at the GPU texture limit
+- `config.json` is reloaded while running
+- Debug overlay (`--debug`, F1) with device, render tier and frame rate
 
-## 4K und Full HD
+## 4K and Full HD
 
-Beim Start wählt die Anzeige die **Render-Stufe** aus drei Werten – der kleinste gewinnt:
+At startup the display picks a **render tier** from three values – the smallest wins:
 
-| Quelle | Woher |
+| Source | From |
 |---|---|
-| Bildschirm | KMS-Modus bzw. Bildschirmgröße |
-| GPU | `GL_MAX_TEXTURE_SIZE` (2048 bei Pi Zero 2 W/3, 4096 bei Pi 4/5) |
-| Einstellung | `display.maxRender`: `"auto"` oder `"1080p"` |
+| Screen | KMS mode / screen size |
+| GPU | `GL_MAX_TEXTURE_SIZE` (2048 on Pi Zero 2 W/3, 4096 on Pi 4/5) |
+| Setting | `display.maxRender`: `"auto"` or `"1080p"` |
 
-- **Pi 3 / Zero 2 W am 4K-Fernseher:** der Bildschirmmodus wird auf 1080p gesetzt, der Fernseher skaliert hoch.
-- **Pi 4:** 4K mit 30 Hz (für Standbilder ideal), **Pi 5:** 4K mit 60 Hz.
-- Layouts sind in Rasterzellen beschrieben, nicht in Pixeln – dieselbe Konfiguration läuft auf beiden Stufen.
+- **Pi 3 / Zero 2 W on a 4K TV:** the screen mode is set to 1080p and the TV upscales.
+- **Pi 4:** 4K at 30 Hz (ideal for still images), **Pi 5:** 4K at 60 Hz.
+- Layouts are described in grid cells, not pixels – the same configuration works on both tiers.
 
-## Entwickeln auf dem Mac
+## Developing on macOS
 
 ```bash
-brew install qt cmake ninja
-cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
+brew install qt exiv2 cmake ninja
+cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix exiv2)"
 cmake --build build
 ctest --test-dir build
 ```
 
-Bilder in den Ordner `media/` neben der Konfiguration legen, dann:
+Put some pictures into `media/` next to the configuration, then:
 
 ```bash
 cp config.example.json config.json
 build/display/berry-kiosk-display --config config.json --windowed --debug
 ```
 
-Mit `Esc` beenden (nur im Fenster- oder Debug-Modus), `F1` schaltet das Overlay.
+`Esc` quits (only in windowed or debug mode), `F1` toggles the overlay.
+`--snapshot <file>` saves a screenshot after `--snapshot-delay` seconds and exits.
 
-## Installation auf dem Raspberry Pi
+## Installing on a Raspberry Pi
 
-Voraussetzung: **Raspberry Pi OS Lite, 64 Bit, auf Basis von Debian 13 „trixie“** (Qt ≥ 6.5).
+Requires **Raspberry Pi OS Lite, 64-bit, based on Debian 13 "trixie"** (Qt ≥ 6.5).
 
 ```bash
 git clone https://github.com/herrlolstick/berry-kiosk.git
@@ -60,66 +62,130 @@ cd berry-kiosk
 ./scripts/install-pi.sh
 ```
 
-Das Skript baut auf dem Pi, legt den Systembenutzer `berry-kiosk` an, kopiert die
-Beispielkonfiguration nach `/var/lib/berry-kiosk/config.json` und startet den Dienst
-`berry-kiosk-display`. Bilder kommen nach `/var/lib/berry-kiosk/media/`.
+The script builds on the Pi, creates the system user `berry-kiosk`, copies the
+example configuration to `/var/lib/berry-kiosk/config.json` and starts the
+`berry-kiosk-display` service. Pictures go into `/var/lib/berry-kiosk/media/`.
 
 ```bash
-journalctl -u berry-kiosk-display -f     # Logs
+journalctl -u berry-kiosk-display -f     # logs
 sudo systemctl restart berry-kiosk-display
 ```
 
-> Auf echter Pi-Hardware ist Meilenstein 1 noch nicht getestet – Rückmeldungen willkommen.
+> Not yet tested on real Pi hardware – feedback welcome.
 
-## Konfiguration
+## Configuration
 
-Siehe [`config.example.json`](config.example.json). Die wichtigsten Felder:
+See [`config.example.json`](config.example.json). Top level:
 
-| Feld | Bedeutung |
+| Field | Meaning |
 |---|---|
-| `display.maxRender` | `"auto"` (4K, wenn möglich) oder `"1080p"` |
-| `display.rotation` | `0`, `90`, `180`, `270` – für hochkant montierte Bildschirme |
-| `media.path` | Bilderordner, relativ zur Konfigurationsdatei oder absolut |
-| `activeLayout` | `id` des angezeigten Layouts |
-| `layouts[].grid` | Rastergröße, z. B. `{ "columns": 12, "rows": 12 }` |
-| `layouts[].regions[]` | Bereiche: `type`, Position `x`/`y`, Größe `w`/`h` in Rasterzellen |
+| `locale` | Language for dates and numbers, e.g. `"de_DE"`, `"en_GB"` |
+| `display.maxRender` | `"auto"` (4K when possible) or `"1080p"` |
+| `display.rotation` | `0`, `90`, `180`, `270` – for screens mounted in portrait |
+| `media.path` | Picture folder, relative to the configuration file or absolute |
+| `quotes` | Global quotes: `[{ "text": "…", "author": "…" }]` or plain strings |
+| `activeLayout` | `id` of the layout to show |
+| `layouts[].grid` | Grid size, e.g. `{ "columns": 12, "rows": 12 }` |
+| `layouts[].regions[]` | Regions: `type`, position `x`/`y` and size `w`/`h` in grid cells, optional `id` and `z` |
 
-Bereich vom Typ `slideshow`:
+### `slideshow`
 
-| Feld | Werte | Standard |
+| Field | Values | Default |
 |---|---|---|
-| `album` | Unterordner von `media.path`, leer = alle Bilder | `""` |
+| `album` | Sub folder of `media.path`, empty = all pictures | `""` |
 | `order` | `"sequential"`, `"shuffle"` | `"sequential"` |
-| `interval` | Anzeigedauer in Sekunden | `15` |
-| `fit` | `"cover"` (füllen), `"contain"` (ganz zeigen) | `"cover"` |
+| `interval` | Seconds per picture | `15` |
+| `fit` | `"cover"` (fill), `"contain"` (show whole picture) | `"cover"` |
 | `transition.type` | `"fade"`, `"none"` | `"fade"` |
-| `transition.duration` | Millisekunden | `1200` |
+| `transition.duration` | Milliseconds | `1200` |
 
-## Aufbau
+### `clock`
+
+| Field | Values | Default |
+|---|---|---|
+| `format` | Qt time format, seconds with `"HH:mm:ss"` | `"HH:mm"` |
+| `showDate` | `true`, `false` | `true` |
+| `dateFormat` | Qt date format | `"dddd, d. MMMM"` |
+
+### `imageInfo`
+
+Shows details of the picture a slideshow currently shows and hides itself for
+pictures without any of the chosen fields.
+
+| Field | Values | Default |
+|---|---|---|
+| `follows` | `id` of a slideshow region | first slideshow |
+| `fields` | `title`, `location`, `date`, `description`, `camera`, `lens`, `exposure` | `["title", "location", "date"]` |
+| `dateFormat` | Qt date format | `"d. MMMM yyyy"` |
+
+Title, description and location come from XMP (`dc:title`, `dc:description`,
+`photoshop:City`, …) or IPTC – what Lightroom, darktable or digiKam write.
+GPS coordinates are never read, so the location of a nest or a den cannot end up
+on a public screen.
+
+### `quote`
+
+| Field | Values | Default |
+|---|---|---|
+| `follows` | `id` of a slideshow region | first slideshow |
+| `source` | `"image-or-global"`, `"image"`, `"global"` | `"image-or-global"` |
+| `interval` | Seconds between global quotes when no slideshow is followed | `60` |
+
+### Widget style
+
+Every widget accepts a `style` object:
+
+| Field | Values | Default |
+|---|---|---|
+| `background` | `"dark"`, `"light"`, `"none"` (text with a soft shadow) | `"dark"` |
+| `backgroundColor`, `color` | Colours such as `"#80000000"`, `"white"` | depends on `background` |
+| `align` | `"left"`, `"center"`, `"right"` | per widget |
+| `font` | Font family | system font |
+| `italic` | Quotes only | `true` |
+| `opacity` | `0` … `1` | `1` |
+| `padding`, `margin` | Share of the region's shorter side | `0.12`, `0.08` |
+
+Text always scales to the size of its region, so widgets look the same at 1080p and 4K.
+
+### Per-picture details (sidecar files)
+
+A JSON file with the picture's name sits next to it (`elk.jpg` → `elk.json`) and
+overrides the embedded metadata:
+
+```json
+{
+  "title": "Elk in the morning mist",
+  "location": "Kiruna, Sweden",
+  "quote": "In every walk with nature one receives far more than he seeks.",
+  "quoteAuthor": "John Muir"
+}
+```
+
+An empty string hides a value that is embedded in the picture.
+
+## Project layout
 
 ```
-core/        libberrycore: Konfiguration, Render-Stufe, Geräteerkennung, Bildsuche (nur QtCore)
-display/     berry-kiosk-display: Qt-Quick-Anzeige (C++ + QML)
-tests/       Unit-Tests für core
-packaging/   systemd-Units
-scripts/     Installationsskript für den Pi
-docs/        Architektur und Planung
+core/        libberrycore: configuration, render tier, device detection, image scanning, metadata
+display/     berry-kiosk-display: the Qt Quick display (C++ and QML)
+tests/       unit tests for core
+packaging/   systemd units
+scripts/     install script for the Pi
+docs/        architecture and planning (German)
 ```
 
-Mehr dazu in [docs/architektur.md](docs/architektur.md).
+## Roadmap
 
-## Fahrplan
+1. ✅ **Foundation** – slideshow, grid layouts, 4K/1080p detection, systemd
+2. ✅ **Widgets** – clock, image info (EXIF/IPTC/XMP), quotes (sidecar or global list)
+3. **Core** – media library (SQLite), image pipeline with 1080p/2160p renditions
+4. **Admin server** – REST API, login, uploads, link to the display
+5. **Web UI I** – media library with uploads
+6. **Web UI II** – grid editor with live preview on the kiosk, animation settings
+7. **Transitions** – slide, Ken Burns, shader effects with fallbacks for weaker GPUs
+8. **Operations** – schedule, screen off (DPMS/CEC), public profile, read-only root, watchdog, HDMI hotplug
+9. **Distribution** – `.deb` packages and a ready-made SD card image
 
-1. ✅ **Grundgerüst** – Diashow, Raster-Layouts, 4K/1080p-Erkennung, systemd
-2. **Widgets** – Uhr, Bildinfo (EXIF), Zitat (Sidecar/XMP)
-3. **Kern** – Mediathek (SQLite), Bild-Pipeline mit 1080p-/2160p-Varianten, Exiv2
-4. **Verwaltungsserver** – REST-API, Login, Upload, Verbindung zur Anzeige
-5. **Website I** – Mediathek mit Upload
-6. **Website II** – Raster-Editor mit Vorschau auf dem Kiosk, Animationen
-7. **Übergänge** – Schieben, Ken Burns, Shader-Effekte mit Rückfall auf schwächerer GPU
-8. **Betrieb** – Zeitplan, Bildschirm aus (DPMS/CEC), Profil „öffentlich“, Overlay-FS, Watchdog, HDMI-Hotplug
-9. **Verteilung** – `.deb`-Pakete und fertiges SD-Karten-Image
+## License
 
-## Lizenz
-
-[MIT](LICENSE). berry-kiosk nutzt Qt unter der LGPLv3 (dynamisch gelinkt).
+[MIT](LICENSE). berry-kiosk uses Qt under the LGPLv3 (dynamically linked) and Exiv2 under the GPLv2+.

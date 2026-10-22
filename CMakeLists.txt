@@ -15,6 +15,16 @@ option(BERRY_BUILD_TESTS "Build the unit tests" ON)
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick)
 qt_standard_project_setup(REQUIRES 6.5)
 
+# Exiv2 reads EXIF/IPTC/XMP. Debian ships a CMake package, fall back to pkg-config.
+find_package(exiv2 CONFIG QUIET)
+if(TARGET Exiv2::exiv2lib)
+    set(BERRY_EXIV2_TARGET Exiv2::exiv2lib)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(EXIV2 REQUIRED IMPORTED_TARGET exiv2>=0.28)
+    set(BERRY_EXIV2_TARGET PkgConfig::EXIV2)
+endif()
+
 add_subdirectory(core)
 add_subdirectory(display)
 

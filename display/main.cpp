@@ -1,5 +1,6 @@
 #include "config.h"
 #include "deviceinfo.h"
+#include "imagemetadata.h"
 #include "kioskcontroller.h"
 #include "mediaimageprovider.h"
 
@@ -143,6 +144,7 @@ int main(int argc, char *argv[])
                       << "| Gerät:" << (device.model.isEmpty() ? QStringLiteral("unbekannt") : device.model)
                       << "| max. Textur:" << options.maxTextureSize;
 
+    berry::initializeMetadataReading();
     KioskController controller(options);
 
     const bool windowed = parser.isSet(windowedOption) && !eglfs;

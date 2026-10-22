@@ -1,14 +1,18 @@
 #include "config.h"
 #include "deviceinfo.h"
+#include "imagemetadata.h"
 #include "imagescanner.h"
 #include "rendertier.h"
 
 #include <QDir>
 #include <QFile>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QTemporaryDir>
 #include <QTest>
+
+#include <exiv2/exiv2.hpp>
 
 using namespace berry;
 
@@ -17,6 +21,7 @@ class TestCore : public QObject
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void renderTier_data();
     void renderTier();
     void fitDecodeSize_data();
@@ -28,7 +33,16 @@ private slots:
     void configActiveLayout();
     void configLoadFailure();
     void scanImages();
+    void configLocaleAndQuotes();
+    void formatting();
+    void readMetadata();
+    void sidecarOverrides();
 };
+
+void TestCore::initTestCase()
+{
+    initializeMetadataReading();
+}
 
 void TestCore::renderTier_data()
 {
@@ -225,6 +239,128 @@ void TestCore::scanImages()
     };
     QCOMPARE(found, expected);
     QVERIFY(berry::scanImages(dir.filePath(QStringLiteral("gibt-es-nicht"))).isEmpty());
+}
+
+void TestCore::configLocaleAndQuotes()
+{
+    const Config defaults = Config::fromJson({}, QStringLiteral("/"));
+    QCOMPARE(defaults.locale(), QStringLiteral("de_DE"));
+    QVERIFY(defaults.quotes().isEmpty());
+
+    const QJsonObject json{
+        {QStringLiteral("locale"), QStringLiteral("en_GB")},
+        {QStringLiteral("quotes"), QJsonArray{
+             QStringLiteral("Nur Text"),
+             QJsonObject{{QStringLiteral("text"), QStringLiteral("Mit Autor")}, {QStringLiteral("author"), QStringLiteral("Jemand")}},
+             QJsonObject{{QStringLiteral("text"), QStringLiteral("  ")}},
+             42,
+         }},
+    };
+    const Config config = Config::fromJson(json, QStringLiteral("/"));
+    QCOMPARE(config.locale(), QStringLiteral("en_GB"));
+    const QJsonArray quotes = config.quotes();
+    QCOMPARE(quotes.size(), 2);
+    QCOMPARE(quotes.at(0).toObject().value(u"text").toString(), QStringLiteral("Nur Text"));
+    QCOMPARE(quotes.at(1).toObject().value(u"author").toString(), QStringLiteral("Jemand"));
+}
+
+void TestCore::formatting()
+{
+    const QLocale de(QLocale::German, QLocale::Germany);
+    const QLocale en(QLocale::English, QLocale::UnitedKingdom);
+
+    QCOMPARE(formatAperture(5.6, de), QStringLiteral("f/5,6"));
+    QCOMPARE(formatAperture(5.6, en), QStringLiteral("f/5.6"));
+    QCOMPARE(formatAperture(8, de), QStringLiteral("f/8"));
+    QCOMPARE(formatAperture(0, de), QString());
+
+    QCOMPARE(formatExposureTime(1.0 / 250, de), QStringLiteral("1/250 s"));
+    QCOMPARE(formatExposureTime(0.5, de), QStringLiteral("0,5 s"));
+    QCOMPARE(formatExposureTime(30, de), QStringLiteral("30 s"));
+    QCOMPARE(formatFocalLength(400, de), QStringLiteral("400 mm"));
+    QCOMPARE(formatFocalLength(18.5, de), QStringLiteral("18,5 mm"));
+
+    QCOMPARE(formatCamera(QStringLiteral("NIKON CORPORATION"), QStringLiteral("NIKON Z 6_2")), QStringLiteral("NIKON Z 6_2"));
+    QCOMPARE(formatCamera(QStringLiteral("Canon"), QStringLiteral("Canon EOS R5")), QStringLiteral("Canon EOS R5"));
+    QCOMPARE(formatCamera(QStringLiteral("SONY"), QStringLiteral("ILCE-7M3")), QStringLiteral("SONY ILCE-7M3"));
+    QCOMPARE(formatCamera(QStringLiteral("FUJIFILM"), QString()), QStringLiteral("FUJIFILM"));
+
+    QCOMPARE(joinLocation({QString(), QStringLiteral("Kiruna"), QStringLiteral("kiruna"), QStringLiteral("Schweden")}),
+             QStringLiteral("Kiruna, Schweden"));
+
+    ImageMetadata m;
+    m.iso = 1600; // no group separator: "ISO 1600", not "ISO 1.600"
+    m.exposureTime = 1.0 / 800;
+    QCOMPARE(formatExposureSettings(m, de), QStringLiteral("1/800 s · ISO 1600"));
+}
+
+void TestCore::readMetadata()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("elch.jpg"));
+
+    QImage pixels(64, 48, QImage::Format_RGB32);
+    pixels.fill(Qt::darkGreen);
+    QVERIFY(pixels.save(path, "JPEG"));
+
+    {
+        auto image = Exiv2::ImageFactory::open(QFile::encodeName(path).toStdString());
+        image->readMetadata();
+        Exiv2::ExifData &exif = image->exifData();
+        exif["Exif.Image.Make"] = std::string("NIKON CORPORATION");
+        exif["Exif.Image.Model"] = std::string("NIKON Z 6_2");
+        exif["Exif.Image.ImageDescription"] = std::string("NIKON DIGITAL CAMERA");
+        exif["Exif.Photo.LensModel"] = std::string("NIKKOR Z 100-400mm f/4.5-5.6 VR S");
+        exif["Exif.Photo.FNumber"] = Exiv2::URational(56, 10);
+        exif["Exif.Photo.ExposureTime"] = Exiv2::URational(1, 800);
+        exif["Exif.Photo.FocalLength"] = Exiv2::URational(400, 1);
+        exif["Exif.Photo.ISOSpeedRatings"] = uint16_t(1600);
+        exif["Exif.Photo.DateTimeOriginal"] = std::string("2024:06:12 05:31:10");
+        Exiv2::XmpData &xmp = image->xmpData();
+        xmp["Xmp.dc.title"] = std::string("lang=\"x-default\" Elch im Morgennebel");
+        xmp["Xmp.photoshop.City"] = std::string("Kiruna");
+        xmp["Xmp.photoshop.Country"] = std::string("Schweden");
+        image->writeMetadata();
+    }
+
+    const ImageMetadata m = readImageMetadata(path);
+    QCOMPARE(m.title, QStringLiteral("Elch im Morgennebel"));
+    QCOMPARE(m.description, QString()); // camera boilerplate is ignored
+    QCOMPARE(m.location, QStringLiteral("Kiruna, Schweden"));
+    QCOMPARE(m.camera, QStringLiteral("NIKON Z 6_2"));
+    QCOMPARE(m.lens, QStringLiteral("NIKKOR Z 100-400mm f/4.5-5.6 VR S"));
+    QCOMPARE(m.taken, QDateTime(QDate(2024, 6, 12), QTime(5, 31, 10)));
+    QCOMPARE(formatExposureSettings(m, QLocale(QLocale::German)), QStringLiteral("f/5,6 · 1/800 s · ISO 1600 · 400 mm"));
+
+    // Files without metadata (or no image at all) must not throw
+    QFile text(dir.filePath(QStringLiteral("kein-bild.jpg")));
+    QVERIFY(text.open(QIODevice::WriteOnly));
+    text.write("kein JPEG");
+    text.close();
+    QCOMPARE(readImageMetadata(text.fileName()).title, QString());
+}
+
+void TestCore::sidecarOverrides()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("fuchs.jpeg"));
+    QImage pixels(32, 32, QImage::Format_RGB32);
+    pixels.fill(Qt::darkYellow);
+    QVERIFY(pixels.save(path, "JPEG"));
+
+    QCOMPARE(sidecarPath(path), dir.filePath(QStringLiteral("fuchs.json")));
+    QFile sidecar(sidecarPath(path));
+    QVERIFY(sidecar.open(QIODevice::WriteOnly));
+    sidecar.write(R"({ "title": "Rotfuchs", "location": "Eifel", "quote": "Geduld ist alles.", "quoteAuthor": "Unbekannt" })");
+    sidecar.close();
+
+    const ImageMetadata m = readImageMetadata(path);
+    QCOMPARE(m.title, QStringLiteral("Rotfuchs"));
+    QCOMPARE(m.location, QStringLiteral("Eifel"));
+    QCOMPARE(m.quote, QStringLiteral("Geduld ist alles."));
+    QCOMPARE(m.quoteAuthor, QStringLiteral("Unbekannt"));
 }
 
 QTEST_GUILESS_MAIN(TestCore)

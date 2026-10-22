@@ -2,6 +2,7 @@
 
 #include "rendertier.h"
 
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
 
@@ -26,6 +27,8 @@ public:
     DisplaySettings display() const;
     QString mediaRoot() const;      // absolute; relative paths resolve against the config file
     QJsonObject activeLayout() const; // falls back to one full-screen slideshow
+    QString locale() const;           // for dates and numbers, e.g. "de_DE"
+    QJsonArray quotes() const;        // [{ "text", "author" }], plain strings are accepted too
 
     bool operator==(const Config &other) const
     {

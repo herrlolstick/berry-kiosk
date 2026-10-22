@@ -17,7 +17,8 @@ sudo apt-get install -y --no-install-recommends \
     build-essential cmake ninja-build \
     qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools \
     qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript \
-    qt6-qpa-plugins qt6-image-formats-plugins libgl-dev libegl-dev
+    qt6-qpa-plugins qt6-image-formats-plugins libexiv2-dev libgl-dev libegl-dev \
+    fonts-dejavu-core
 
 echo "==> Bauen"
 cmake -S "$REPO_DIR" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBERRY_BUILD_TESTS=OFF

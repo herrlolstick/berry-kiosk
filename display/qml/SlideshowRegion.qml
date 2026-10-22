@@ -26,7 +26,11 @@ Item {
     }
     readonly property bool canRun: decodeSize.width > 0 && media.count > 0
 
+    // Emitted when an image starts to fade in; widgets follow it
+    signal shown(string path)
+
     property bool started: false
+    property string pendingPath
     property Image current: null  // slot on screen
     property Image pending: null  // slot being loaded
     property Image previous: null // slot fading out
@@ -42,6 +46,7 @@ Item {
         }
         started = true
         pending = current === slotA ? slotB : slotA
+        pendingPath = path
         pending.source = "image://media/" + (cover ? "cover" : "contain") + "/" + encodeURIComponent(path)
         if (pending.status === Image.Ready)
             reveal()
@@ -66,6 +71,7 @@ Item {
         current.z = 1
         if (previous)
             previous.z = 0
+        shown(pendingPath)
 
         if (transitionDuration > 0) {
             fadeIn.target = current

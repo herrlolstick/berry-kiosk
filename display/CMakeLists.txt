@@ -3,6 +3,7 @@ qt_add_executable(berry-kiosk-display
     kioskcontroller.h kioskcontroller.cpp
     mediaimageprovider.h mediaimageprovider.cpp
     mediasource.h mediasource.cpp
+    metadatareader.h metadatareader.cpp
 )
 
 set(berry_qml_files
@@ -10,6 +11,10 @@ set(berry_qml_files
     qml/LayoutView.qml
     qml/SlideshowRegion.qml
     qml/DebugOverlay.qml
+    qml/WidgetPanel.qml
+    qml/ClockWidget.qml
+    qml/ImageInfoWidget.qml
+    qml/QuoteWidget.qml
 )
 # Serve the QML files from the module root instead of a qml/ sub folder
 foreach(file IN LISTS berry_qml_files)
