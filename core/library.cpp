@@ -10,6 +10,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -257,9 +259,9 @@ void Library::writeImage(qint64 id, const QString &file, const QString &relative
         query.prepare(QStringLiteral(
             "INSERT INTO images (path, album, file_size, file_mtime, sidecar_mtime, width, height, title, "
             "description, location, camera, lens, taken, aperture, exposure_time, focal_length, iso, quote, "
-            "quote_author, added_at) "
+            "quote_author, enabled, added_at) "
             "VALUES (:path, :album, :size, :mtime, :sidecar, :width, :height, :title, :description, :location, "
-            ":camera, :lens, :taken, :aperture, :exposure, :focal, :iso, :quote, :author, :added)"));
+            ":camera, :lens, :taken, :aperture, :exposure, :focal, :iso, :quote, :author, :enabled, :added)"));
         query.bindValue(QStringLiteral(":added"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     } else {
         query.prepare(QStringLiteral(
@@ -267,7 +269,7 @@ void Library::writeImage(qint64 id, const QString &file, const QString &relative
             "sidecar_mtime = :sidecar, width = :width, height = :height, title = :title, "
             "description = :description, location = :location, camera = :camera, lens = :lens, taken = :taken, "
             "aperture = :aperture, exposure_time = :exposure, focal_length = :focal, iso = :iso, quote = :quote, "
-            "quote_author = :author WHERE id = :id"));
+            "quote_author = :author, enabled = :enabled WHERE id = :id"));
         query.bindValue(QStringLiteral(":id"), id);
     }
     query.bindValue(QStringLiteral(":path"), relative);
@@ -290,6 +292,7 @@ void Library::writeImage(qint64 id, const QString &file, const QString &relative
     query.bindValue(QStringLiteral(":iso"), m.iso > 0 ? QVariant(m.iso) : QVariant());
     query.bindValue(QStringLiteral(":quote"), nullable(m.quote));
     query.bindValue(QStringLiteral(":author"), nullable(m.quoteAuthor));
+    query.bindValue(QStringLiteral(":enabled"), m.enabled ? 1 : 0);
     run(query);
 }
 
@@ -374,60 +377,240 @@ int Library::imageCount() const
     return run(query, QStringLiteral("SELECT COUNT(*) FROM images")) && query.next() ? query.value(0).toInt() : 0;
 }
 
+
+QString renditionFilePath(const QString &cacheRoot, qint64 imageId, const QString &kind)
+{
+    return QDir(cacheRoot).filePath(renditionPath(imageId, kind));
+}
+
+namespace {
+
+// A read-only connection for one call; safe next to the writing admin worker
+class ReadOnlyDatabase
+{
+public:
+    explicit ReadOnlyDatabase(const QString &path)
+        : m_name(uniqueConnectionName(QLatin1String("read")))
+    {
+        m_database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_name);
+        m_database.setDatabaseName(path);
+        m_database.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY;QSQLITE_BUSY_TIMEOUT=2000"));
+        m_exists = QFileInfo::exists(path);
+    }
+
+    ~ReadOnlyDatabase()
+    {
+        m_database.close();
+        m_database = QSqlDatabase();
+        QSqlDatabase::removeDatabase(m_name);
+    }
+
+    bool open(QString *error)
+    {
+        if (!m_exists) {
+            if (error)
+                *error = QStringLiteral("keine Mediathek unter %1").arg(m_database.databaseName());
+            return false;
+        }
+        if (m_database.open())
+            return true;
+        if (error)
+            *error = m_database.lastError().text();
+        return false;
+    }
+
+    const QSqlDatabase &database() const { return m_database; }
+
+private:
+    QString m_name;
+    QSqlDatabase m_database;
+    bool m_exists = false;
+};
+
+struct AlbumFilter
+{
+    QString album;      // '' = everything
+    QString likePrefix; // for sub folders, LIKE-escaped
+};
+
+AlbumFilter albumFilter(const QString &album)
+{
+    QString clean = QDir::cleanPath(album);
+    if (clean == u"." || clean == u"/")
+        clean.clear();
+    clean = notNull(clean);
+    QString prefix = clean;
+    prefix.replace(u'\\', QStringLiteral("\\\\")).replace(u'%', QStringLiteral("\\%")).replace(u'_', QStringLiteral("\\_"));
+    return {clean, prefix + QStringLiteral("/%")};
+}
+
+constexpr auto kAlbumCondition = "(? = '' OR album = ? OR album LIKE ? ESCAPE '\\')";
+
+void bindAlbum(QSqlQuery &query, const AlbumFilter &filter)
+{
+    query.addBindValue(filter.album);
+    query.addBindValue(filter.album);
+    query.addBindValue(filter.likePrefix);
+}
+
+constexpr auto kMediaColumns =
+    "id, path, album, width, height, title, description, location, camera, lens, taken, aperture, "
+    "exposure_time, focal_length, iso, quote, quote_author, enabled, added_at, "
+    "(SELECT group_concat(kind) FROM renditions r WHERE r.image_id = images.id AND r.path <> '')";
+
+QJsonObject mediaFromQuery(const QSqlQuery &query)
+{
+    QJsonObject media{
+        {QStringLiteral("id"), query.value(0).toLongLong()},
+        {QStringLiteral("path"), query.value(1).toString()},
+        {QStringLiteral("album"), query.value(2).toString()},
+        {QStringLiteral("width"), query.value(3).toInt()},
+        {QStringLiteral("height"), query.value(4).toInt()},
+        {QStringLiteral("enabled"), query.value(17).toInt() != 0},
+        {QStringLiteral("addedAt"), query.value(18).toString()},
+        {QStringLiteral("renditions"),
+         QJsonArray::fromStringList(query.value(19).toString().split(u',', Qt::SkipEmptyParts))},
+    };
+    const auto text = [&](int column, const char *key) {
+        if (!query.isNull(column))
+            media.insert(QLatin1String(key), query.value(column).toString());
+    };
+    // EXIF values come as floats: 5.6 would read 5.599999904632568 otherwise
+    const auto number = [&](int column, const char *key) {
+        if (!query.isNull(column))
+            media.insert(QLatin1String(key), QString::number(query.value(column).toDouble(), 'g', 6).toDouble());
+    };
+    text(5, "title");
+    text(6, "description");
+    text(7, "location");
+    text(8, "camera");
+    text(9, "lens");
+    text(10, "taken");
+    number(11, "aperture");
+    number(12, "exposureTime");
+    number(13, "focalLength");
+    number(14, "iso");
+    text(15, "quote");
+    text(16, "quoteAuthor");
+    return media;
+}
+
+} // namespace
+
 bool readLibrary(const QString &databasePath, const QString &mediaRoot, const QString &cacheRoot,
                  const QString &album, QList<LibraryEntry> *entries, QString *error)
 {
     entries->clear();
-    if (!QFileInfo::exists(databasePath)) {
+    ReadOnlyDatabase db(databasePath);
+    if (!db.open(error))
+        return false;
+
+    QSqlQuery query(db.database());
+    query.prepare(QStringLiteral(
+        "SELECT i.id, i.path, r.kind, r.path FROM images i "
+        "LEFT JOIN renditions r ON r.image_id = i.id AND r.path <> '' "
+        "WHERE i.enabled = 1 AND i.width > 0 AND (? = '' OR i.album = ? OR i.album LIKE ? ESCAPE '\\') "
+        "ORDER BY i.path COLLATE NOCASE, i.id"));
+    bindAlbum(query, albumFilter(album));
+    if (!query.exec()) {
         if (error)
-            *error = QStringLiteral("keine Mediathek unter %1").arg(databasePath);
+            *error = query.lastError().text();
         return false;
     }
 
-    QString cleanAlbum = QDir::cleanPath(album);
-    if (cleanAlbum == u".")
-        cleanAlbum.clear();
-    cleanAlbum = notNull(cleanAlbum);
-    QString likePrefix = cleanAlbum;
-    likePrefix.replace(u'\\', QStringLiteral("\\\\")).replace(u'%', QStringLiteral("\\%")).replace(u'_', QStringLiteral("\\_"));
-
-    const QString name = uniqueConnectionName(QLatin1String("read"));
-    bool ok = false;
-    {
-        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
-        db.setDatabaseName(databasePath);
-        db.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY;QSQLITE_BUSY_TIMEOUT=2000"));
-        if (db.open()) {
-            QSqlQuery query(db);
-            query.prepare(QStringLiteral(
-                "SELECT i.id, i.path, r.kind, r.path FROM images i "
-                "LEFT JOIN renditions r ON r.image_id = i.id AND r.path <> '' "
-                "WHERE i.enabled = 1 AND i.width > 0 AND (? = '' OR i.album = ? OR i.album LIKE ? ESCAPE '\\') "
-                "ORDER BY i.path COLLATE NOCASE, i.id"));
-            query.addBindValue(cleanAlbum);
-            query.addBindValue(cleanAlbum);
-            query.addBindValue(likePrefix + QStringLiteral("/%"));
-            if (query.exec()) {
-                const QDir media(mediaRoot);
-                const QDir cache(cacheRoot);
-                while (query.next()) {
-                    const qint64 id = query.value(0).toLongLong();
-                    if (entries->isEmpty() || entries->constLast().id != id)
-                        entries->append({id, media.filePath(query.value(1).toString()), {}});
-                    if (!query.isNull(2))
-                        entries->last().renditions.insert(query.value(2).toString(),
-                                                          cache.filePath(query.value(3).toString()));
-                }
-                ok = true;
-            } else if (error) {
-                *error = query.lastError().text();
-            }
-        } else if (error) {
-            *error = db.lastError().text();
-        }
+    const QDir media(mediaRoot);
+    const QDir cache(cacheRoot);
+    while (query.next()) {
+        const qint64 id = query.value(0).toLongLong();
+        if (entries->isEmpty() || entries->constLast().id != id)
+            entries->append({id, media.filePath(query.value(1).toString()), {}});
+        if (!query.isNull(2))
+            entries->last().renditions.insert(query.value(2).toString(), cache.filePath(query.value(3).toString()));
     }
-    QSqlDatabase::removeDatabase(name);
-    return ok;
+    return true;
+}
+
+QJsonObject queryMedia(const QString &databasePath, const MediaQuery &request, QString *error)
+{
+    ReadOnlyDatabase db(databasePath);
+    if (!db.open(error))
+        return {};
+
+    const AlbumFilter filter = albumFilter(request.album);
+    QSqlQuery query(db.database());
+    query.prepare(QStringLiteral("SELECT COUNT(*) FROM images WHERE %1").arg(QLatin1String(kAlbumCondition)));
+    bindAlbum(query, filter);
+    if (!query.exec() || !query.next()) {
+        if (error)
+            *error = query.lastError().text();
+        return {};
+    }
+    const int total = query.value(0).toInt();
+
+    query.prepare(QStringLiteral("SELECT %1 FROM images WHERE %2 ORDER BY added_at DESC, id DESC LIMIT ? OFFSET ?")
+                      .arg(QLatin1String(kMediaColumns), QLatin1String(kAlbumCondition)));
+    bindAlbum(query, filter);
+    query.addBindValue(qBound(1, request.limit, 500));
+    query.addBindValue(qMax(0, request.offset));
+    if (!query.exec()) {
+        if (error)
+            *error = query.lastError().text();
+        return {};
+    }
+    QJsonArray items;
+    while (query.next())
+        items.append(mediaFromQuery(query));
+    return {{QStringLiteral("total"), total}, {QStringLiteral("items"), items}};
+}
+
+QJsonObject mediaById(const QString &databasePath, qint64 id, QString *error)
+{
+    ReadOnlyDatabase db(databasePath);
+    if (!db.open(error))
+        return {};
+    QSqlQuery query(db.database());
+    query.prepare(QStringLiteral("SELECT %1 FROM images WHERE id = ?").arg(QLatin1String(kMediaColumns)));
+    query.addBindValue(id);
+    if (!query.exec()) {
+        if (error)
+            *error = query.lastError().text();
+        return {};
+    }
+    return query.next() ? mediaFromQuery(query) : QJsonObject();
+}
+
+qint64 mediaIdByPath(const QString &databasePath, const QString &relativePath)
+{
+    ReadOnlyDatabase db(databasePath);
+    if (!db.open(nullptr))
+        return 0;
+    QSqlQuery query(db.database());
+    query.prepare(QStringLiteral("SELECT id FROM images WHERE path = ?"));
+    query.addBindValue(relativePath);
+    return query.exec() && query.next() ? query.value(0).toLongLong() : 0;
+}
+
+QJsonArray albumCounts(const QString &databasePath, QString *error)
+{
+    ReadOnlyDatabase db(databasePath);
+    if (!db.open(error))
+        return {};
+    QSqlQuery query(db.database());
+    if (!query.exec(QStringLiteral(
+            "SELECT album, COUNT(*), SUM(enabled) FROM images GROUP BY album ORDER BY album COLLATE NOCASE"))) {
+        if (error)
+            *error = query.lastError().text();
+        return {};
+    }
+    QJsonArray albums;
+    while (query.next()) {
+        albums.append(QJsonObject{
+            {QStringLiteral("name"), query.value(0).toString()},
+            {QStringLiteral("count"), query.value(1).toInt()},
+            {QStringLiteral("enabled"), query.value(2).toInt()},
+        });
+    }
+    return albums;
 }
 
 } // namespace berry

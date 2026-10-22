@@ -1,5 +1,6 @@
 #include "config.h"
 #include "deviceinfo.h"
+#include "displaycontrol.h"
 #include "imagemetadata.h"
 #include "kioskcontroller.h"
 #include "mediaimageprovider.h"
@@ -161,6 +162,11 @@ int main(int argc, char *argv[])
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app, [] { QCoreApplication::exit(1); },
         Qt::QueuedConnection);
     engine.loadFromModule("BerryKiosk", "Main");
+
+    DisplayControl control(&controller);
+    if (!engine.rootObjects().isEmpty())
+        control.setWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst()));
+    control.start();
 
     if (parser.isSet(snapshotOption)) {
         const QString file = parser.value(snapshotOption);

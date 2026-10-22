@@ -1,5 +1,7 @@
 #include "imagemetadata.h"
 
+#include "state.h"
+
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -178,6 +180,44 @@ void applySidecar(ImageMetadata &metadata, const QJsonObject &sidecar)
     take(u"location", metadata.location);
     take(u"quote", metadata.quote);
     take(u"quoteAuthor", metadata.quoteAuthor);
+    if (const QJsonValue enabled = sidecar.value(u"enabled"); enabled.isBool())
+        metadata.enabled = enabled.toBool();
+}
+
+bool updateSidecar(const QString &imagePath, const QJsonObject &changes, QString *error)
+{
+    const QString path = sidecarPath(imagePath);
+    QJsonObject sidecar;
+    QFile file(path);
+    if (file.open(QIODevice::ReadOnly)) {
+        const QByteArray content = file.readAll();
+        const QJsonDocument doc = QJsonDocument::fromJson(content);
+        // Never overwrite a file someone wrote by hand that we cannot read
+        if (!doc.isObject() && !content.trimmed().isEmpty()) {
+            if (error)
+                *error = QStringLiteral("%1 ist kein gültiges JSON").arg(path);
+            return false;
+        }
+        sidecar = doc.object();
+        file.close();
+    }
+
+    for (auto it = changes.constBegin(); it != changes.constEnd(); ++it) {
+        if (it.value().isNull() || it.value().isUndefined())
+            sidecar.remove(it.key());
+        else
+            sidecar.insert(it.key(), it.value());
+    }
+
+    if (sidecar.isEmpty()) {
+        if (QFile::exists(path) && !QFile::remove(path)) {
+            if (error)
+                *error = QStringLiteral("%1 nicht löschbar").arg(path);
+            return false;
+        }
+        return true;
+    }
+    return writeJsonFile(path, sidecar, error);
 }
 
 QString formatCamera(const QString &make, const QString &model)

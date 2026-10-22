@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QHash>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -76,5 +78,23 @@ private:
 // Returns false when there is no usable library.
 bool readLibrary(const QString &databasePath, const QString &mediaRoot, const QString &cacheRoot,
                  const QString &album, QList<LibraryEntry> *entries, QString *error = nullptr);
+
+// Where a rendition lives (whether or not it exists yet)
+QString renditionFilePath(const QString &cacheRoot, qint64 imageId, const QString &kind);
+
+// Read side for the admin API, read-only like readLibrary. Media objects carry
+// id, path, album, width, height, enabled, addedAt, renditions (kinds) and,
+// where known, title, description, location, camera, lens, taken, aperture,
+// exposureTime, focalLength, iso, quote and quoteAuthor.
+struct MediaQuery
+{
+    QString album; // including sub folders, '' = all
+    int offset = 0;
+    int limit = 100;
+};
+QJsonObject queryMedia(const QString &databasePath, const MediaQuery &query, QString *error = nullptr); // { total, items }
+QJsonObject mediaById(const QString &databasePath, qint64 id, QString *error = nullptr); // empty when unknown
+qint64 mediaIdByPath(const QString &databasePath, const QString &relativePath);         // 0 when unknown
+QJsonArray albumCounts(const QString &databasePath, QString *error = nullptr); // [{ name, count, enabled }]
 
 } // namespace berry

@@ -26,15 +26,21 @@
 Zwei getrennte Prozesse: Stürzt die Verwaltung ab oder verarbeitet sie gerade viele
 Uploads, läuft die Diashow ungestört weiter. Beide teilen sich `libberrycore`.
 
-Stand Meilenstein 3: `berry-kiosk-admin` gleicht die Mediathek (`core/library.*`) mit
-dem Bilderordner ab und erstellt Varianten (`core/renditions.*`) in einem eigenen
-Thread, Bild für Bild, damit neue Abgleich-Anfragen dazwischenkommen. Noch ohne
-Web-API und ohne Socket: Anzeige und Admin verständigen sich über kleine JSON-Dateien
-in `state/` (`display.json` mit der Render-Stufe, `library.json` mit einem
-Generationszähler). Die Anzeige liest die Mediathek nur lesend (SQLite im WAL-Modus)
-und fällt auf den Ordner zurück, solange es keine gibt. Widgets folgen einer
-Diashow-Region über deren `shown`-Signal; `LayoutView` merkt sich das aktuelle Bild
-je Region.
+Stand Meilenstein 4: In `berry-kiosk-admin` läuft die Web-API (`QHttpServer`,
+`admin/apiserver.*`) im Hauptthread, Abgleich und Varianten (`core/library.*`,
+`core/renditions.*`) in einem eigenen Thread, Bild für Bild, damit neue
+Abgleich-Anfragen dazwischenkommen. Die API liest die Mediathek nur lesend; ihre
+Änderungen landen im Bilderordner (Uploads, Sidecar-JSON, Papierkorb) und in
+`config.json`, der Worker übernimmt sie beim nächsten Abgleich. Anmeldung: ein Konto
+mit PBKDF2-Hash in `state/auth.json`, Sitzungen im Speicher, CSRF-Schutz über
+SameSite-Cookie und Pflicht-Header. Zur Anzeige führt ein lokaler Socket
+(`state/display.sock`, nur gleicher Benutzer) mit CBOR-Nachrichten
+(`core/displayprotocol.*`): nächstes Bild, Pause, Bildschirmfoto, Status und das
+Ereignis „Bild gezeigt“. Daneben bleiben die JSON-Dateien in `state/`
+(`display.json` mit der Render-Stufe, `library.json` mit einem Generationszähler).
+Die Anzeige liest die Mediathek nur lesend (SQLite im WAL-Modus) und fällt auf den
+Ordner zurück, solange es keine gibt. Widgets folgen einer Diashow-Region über deren
+`shown`-Signal; `LayoutView` merkt sich das aktuelle Bild je Region.
 
 ## Anzeige
 

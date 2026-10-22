@@ -5,8 +5,9 @@ photography in a living room or a public space. It runs without a desktop,
 straight on the screen (Qt Quick via eglfs/KMS), works on low-cost boards like
 the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 
-> **Status:** milestone 3 – slideshow, widgets, media library and image
-> pipeline. The web admin interface is next, see the [roadmap](#roadmap).
+> **Status:** milestone 4 – slideshow, widgets, media library, image pipeline
+> and the admin web API with a small web console. The full web UI is next, see
+> the [roadmap](#roadmap).
 
 ## Features
 
@@ -15,6 +16,7 @@ the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 - **Widgets:** clock, image info (title, location, date, camera settings from EXIF/IPTC/XMP) and quotes
 - **4K with automatic fallback to Full HD** (see below)
 - **Media library** (SQLite) with prepared 1080p/2160p renditions and thumbnails, kept up to date in the background
+- **Admin web API** with login, uploads, metadata editing and remote control of the display (next picture, pause, live screenshot), plus a small built-in web console
 - Images are decoded straight to their display size – even 24 MP JPEGs run on boards with 512 MB RAM
 - EXIF orientation, portrait screens (`rotation`), panoramas are capped at the GPU texture limit
 - `config.json` is reloaded while running
@@ -69,10 +71,91 @@ cache/thumb/
 state/          display.json and library.json – how display and admin service talk
 ```
 
+## Admin web API
+
+`berry-kiosk-admin` also serves a REST API and a small web console (compiled
+into the binary) on port 8080: open `http://<pi>.local:8080/`. The full web UI
+follows in milestone 5.
+
+### Setup
+
+There is one admin account. Set or change its password on the Pi:
+
+```bash
+sudo -u berry-kiosk berry-kiosk-admin --config /var/lib/berry-kiosk/config.json --set-password [--user admin]
+```
+
+It asks twice without echo, or reads one line from stdin (for scripts). The
+password needs at least 8 characters and is stored as salted PBKDF2-SHA256
+(200 000 iterations) in `state/auth.json`, readable by the service user only.
+Changing it ends all sessions. The install script asks for it on first install.
+
+### Security
+
+- Logging in sets the cookie `berry_session` (random token, `HttpOnly`,
+  `SameSite=Strict`, valid for 12 hours of inactivity). Sessions live in memory:
+  after a restart of the service you log in again.
+- Requests that change something need the header `X-Berry-Kiosk: 1`; together
+  with `SameSite` this shuts out cross-site requests (CSRF).
+- After 5 failed logins from one address, the wait doubles with every further
+  failure, from 30 seconds up to 15 minutes.
+- It speaks plain HTTP and is meant for the home network. For anything else, put
+  it behind a TLS reverse proxy (e.g. on a NAS or Umbrel) and set `admin.address`
+  to `127.0.0.1`, or firewall the port.
+- Request bodies are held in memory (up to `admin.maxUploadMB`), so do not expose
+  the port to untrusted networks. The display is a separate process and keeps
+  running even if the admin service is overloaded.
+
+### How changes are stored
+
+The media folder stays the source of truth, so the library can always be rebuilt
+from it:
+
+- **Uploads** land in the album folder. Names are sanitised, an existing file
+  gets a ` (2)` suffix instead of being overwritten, and only JPEG, PNG and WebP
+  are accepted (checked by content).
+- **Metadata edits** go to the picture's sidecar JSON (`title`, `description`,
+  `location`, `quote`, `quoteAuthor`); `"enabled": false` hides a picture from the slideshow.
+- **Deleting** moves the picture and its sidecar to `trash/<yyyyMMdd-HHmmss>/<path>`;
+  nothing is deleted for good.
+- The library worker picks all of this up by itself.
+
+### Link to the display
+
+The display listens on the local socket `state/display.sock` (only the same
+system user can connect; a short name in the temp folder is used when the path
+would be too long). The admin service uses it for next picture, pause/resume,
+live screenshots and the status, and the display reports every picture it shows.
+
+### Endpoints
+
+All under `/api`, JSON in and out, errors as `{ "error": "…" }`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/auth/session` | Logged in? Password set? |
+| `POST` | `/auth/login` | `{ "username", "password" }`, sets the session cookie |
+| `POST` | `/auth/logout` | Ends the session |
+| `GET` | `/status` | Version, uptime, display, library, storage |
+| `GET` | `/media?album=&offset=&limit=` | Pictures, newest first |
+| `GET` | `/media/{id}` | One picture with its metadata |
+| `PATCH` | `/media/{id}` | Edit metadata or `enabled` (written to the sidecar) |
+| `DELETE` | `/media/{id}` | Move to the trash |
+| `GET` | `/media/{id}/thumb` | Thumbnail |
+| `GET` | `/media/{id}/image?kind=1080p\|2160p\|original` | Rendition or original |
+| `POST` | `/media?album=&name=` | Upload, the raw file as body |
+| `GET` | `/albums` | Albums with picture counts |
+| `POST` | `/albums` | `{ "name" }`, creates a folder |
+| `GET` | `/config` | `config.json` |
+| `PUT` | `/config` | Validated; the previous version is kept as `config.json.bak` |
+| `POST` | `/display/next`, `/display/pause`, `/display/resume` | Remote control |
+| `GET` | `/display/screenshot?maxWidth=` | Live screenshot (JPEG) |
+| `POST` | `/library/sync` | Sync the library now |
+
 ## Developing on macOS
 
 ```bash
-brew install qt exiv2 cmake ninja   # Qt includes the SQLite driver
+brew install qt exiv2 cmake ninja   # Qt includes the SQLite driver and Qt HttpServer
 cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="$(brew --prefix qt);$(brew --prefix exiv2)"
 cmake --build build
 ctest --test-dir build
@@ -96,9 +179,16 @@ build/admin/berry-kiosk-admin --config config.json          # watches media/ and
 build/admin/berry-kiosk-admin --config config.json --once   # sync, render, exit
 ```
 
+Running continuously, it also serves the API and web console on
+http://localhost:8080. Set a password first:
+
+```bash
+build/admin/berry-kiosk-admin --config config.json --set-password
+```
+
 ## Installing on a Raspberry Pi
 
-Requires **Raspberry Pi OS Lite, 64-bit, based on Debian 13 "trixie"** (Qt ≥ 6.5).
+Requires **Raspberry Pi OS Lite, 64-bit, based on Debian 13 "trixie"** (Qt ≥ 6.8 for Qt HttpServer).
 
 ```bash
 git clone https://github.com/herrlolstick/berry-kiosk.git
@@ -108,8 +198,9 @@ cd berry-kiosk
 
 The script builds on the Pi, creates the system user `berry-kiosk`, copies the
 example configuration to `/var/lib/berry-kiosk/config.json` and starts the
-services `berry-kiosk-display` and `berry-kiosk-admin`. Pictures go into
-`/var/lib/berry-kiosk/media/`.
+services `berry-kiosk-display` and `berry-kiosk-admin`. On first install it asks
+for the admin password; the web console is then at `http://<pi>.local:8080/`.
+Pictures go into `/var/lib/berry-kiosk/media/` – copied in, or uploaded via the web.
 
 ```bash
 journalctl -u berry-kiosk-display -u berry-kiosk-admin -f     # logs
@@ -131,6 +222,10 @@ See [`config.example.json`](config.example.json). Top level:
 | `library.renditions` | `"auto"` (the display's tier) or a list such as `["1080p", "2160p"]` |
 | `library.jpegQuality` | JPEG quality of renditions, `50` … `100`, default `88` |
 | `library.database`, `library.cache`, `library.state` | Paths, default `library.db`, `cache`, `state` – e.g. put the cache on a USB drive |
+| `library.trash` | Where deleted pictures are moved, default `trash` |
+| `admin.address` | `"0.0.0.0"` (every interface) or `"127.0.0.1"` (only the device, e.g. behind a reverse proxy) |
+| `admin.port` | Port of the API and web console, default `8080` |
+| `admin.maxUploadMB` | Largest upload in MB, default `64` |
 | `quotes` | Global quotes: `[{ "text": "…", "author": "…" }]` or plain strings |
 | `activeLayout` | `id` of the layout to show |
 | `layouts[].grid` | Grid size, e.g. `{ "columns": 12, "rows": 12 }` |
@@ -209,15 +304,16 @@ overrides the embedded metadata:
 }
 ```
 
-An empty string hides a value that is embedded in the picture.
+An empty string hides a value that is embedded in the picture. `"enabled": false`
+hides the picture from the slideshow.
 
 ## Project layout
 
 ```
 core/        libberrycore: configuration, render tier, metadata, media library, renditions
 display/     berry-kiosk-display: the Qt Quick display (C++ and QML)
-admin/       berry-kiosk-admin: library sync and renditions (web API to come)
-tests/       unit tests for core
+admin/       berry-kiosk-admin: library sync, renditions, web API and web console
+tests/       unit and API tests
 packaging/   systemd units
 scripts/     install script for the Pi
 docs/        architecture and planning (German)
@@ -228,7 +324,7 @@ docs/        architecture and planning (German)
 1. ✅ **Foundation** – slideshow, grid layouts, 4K/1080p detection, systemd
 2. ✅ **Widgets** – clock, image info (EXIF/IPTC/XMP), quotes (sidecar or global list)
 3. ✅ **Media library** – SQLite index, image pipeline with 1080p/2160p renditions and thumbnails
-4. **Admin server** – REST API, login, uploads, link to the display
+4. ✅ **Admin server** – REST API, login, uploads, metadata editing, remote control of the display
 5. **Web UI I** – media library with uploads
 6. **Web UI II** – grid editor with live preview on the kiosk, animation settings
 7. **Transitions** – slide, Ken Burns, shader effects with fallbacks for weaker GPUs

@@ -12,7 +12,9 @@ option(BERRY_BUILD_TESTS "Build the unit tests" ON)
 
 # Qt 6.5 is the oldest version with qt_add_qml_module/loadFromModule as used here.
 # Raspberry Pi OS based on Debian 13 (trixie) ships Qt 6.8.
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Quick Sql)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Network Quick Sql)
+# The admin web API needs the QHttpServer API of Qt 6.8 (Debian trixie: 6.8.2)
+find_package(Qt6 6.8 REQUIRED COMPONENTS HttpServer)
 qt_standard_project_setup(REQUIRES 6.5)
 
 # Exiv2 reads EXIF/IPTC/XMP. Debian ships a CMake package, fall back to pkg-config.

@@ -91,6 +91,7 @@ LibrarySettings Config::library() const
     settings.database = resolve(u"database", QStringLiteral("library.db"));
     settings.cacheRoot = resolve(u"cache", QStringLiteral("cache"));
     settings.stateDir = resolve(u"state", QStringLiteral("state"));
+    settings.trashDir = resolve(u"trash", QStringLiteral("trash"));
     settings.jpegQuality = qBound(50, library.value(u"jpegQuality").toInt(88), 100);
 
     // "auto" (or nothing) leaves the choice to the display's render tier
@@ -122,6 +123,21 @@ QJsonObject Config::activeLayout() const
     if (!layouts.isEmpty() && layouts.first().isObject())
         return layouts.first().toObject();
     return defaultLayout();
+}
+
+AdminSettings Config::admin() const
+{
+    const QJsonObject admin = m_json.value(u"admin").toObject();
+    AdminSettings settings;
+    const QString address = admin.value(u"address").toString().trimmed();
+    if (!address.isEmpty())
+        settings.address = address;
+    const int port = admin.value(u"port").toInt(settings.port);
+    if (port > 0 && port <= 65535)
+        settings.port = quint16(port);
+    const int maxUploadMB = admin.value(u"maxUploadMB").toInt(64);
+    settings.maxUploadBytes = qint64(qBound(1, maxUploadMB, 1024)) * 1024 * 1024;
+    return settings;
 }
 
 QString Config::locale() const

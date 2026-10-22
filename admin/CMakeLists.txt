@@ -1,12 +1,26 @@
-# berry-kiosk-admin: keeps the media library up to date and prepares the
-# renditions. Milestone 4 adds the web API to this process.
-qt_add_executable(berry-kiosk-admin
-    main.cpp
+# berry-kiosk-admin: keeps the media library up to date, prepares the
+# renditions and serves the web API and admin UI.
+qt_add_library(berryadmin STATIC
+    apiserver.h apiserver.cpp
+    auth.h auth.cpp
     changewatcher.h changewatcher.cpp
+    displaylink.h displaylink.cpp
     libraryworker.h libraryworker.cpp
 )
+target_include_directories(berryadmin PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(berryadmin PUBLIC BERRY_KIOSK_VERSION="${PROJECT_VERSION}")
+target_link_libraries(berryadmin PUBLIC berrycore Qt6::Core Qt6::Gui Qt6::Network Qt6::HttpServer)
 
-target_compile_definitions(berry-kiosk-admin PRIVATE BERRY_KIOSK_VERSION="${PROJECT_VERSION}")
-target_link_libraries(berry-kiosk-admin PRIVATE berrycore Qt6::Core)
+# The web UI is compiled in, so there is nothing to install or to get out of sync
+qt_add_resources(berryadmin "www"
+    PREFIX "/"
+    FILES
+        www/index.html
+        www/app.js
+        www/app.css
+)
+
+qt_add_executable(berry-kiosk-admin main.cpp)
+target_link_libraries(berry-kiosk-admin PRIVATE berryadmin)
 
 install(TARGETS berry-kiosk-admin RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

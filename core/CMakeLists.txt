@@ -4,9 +4,11 @@
 qt_add_library(berrycore STATIC
     config.h config.cpp
     deviceinfo.h deviceinfo.cpp
+    displayprotocol.h displayprotocol.cpp
     imagemetadata.h imagemetadata.cpp
     imagescanner.h imagescanner.cpp
     library.h library.cpp
+    mediafiles.h mediafiles.cpp
     renditions.h renditions.cpp
     rendertier.h rendertier.cpp
     state.h state.cpp

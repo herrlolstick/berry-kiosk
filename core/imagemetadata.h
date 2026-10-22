@@ -24,6 +24,7 @@ struct ImageMetadata
     // Only from the sidecar file
     QString quote;
     QString quoteAuthor;
+    bool enabled = true; // false hides the picture from the slideshow
 
     QVariantMap toVariantMap(const QLocale &locale) const;
 };
@@ -38,9 +39,13 @@ ImageMetadata readImageMetadata(const QString &path);
 
 // "elch.jpg" -> "elch.json"
 QString sidecarPath(const QString &imagePath);
-// Known keys: title, description, location, quote, quoteAuthor. An empty string
-// clears a value taken from the image.
+// Known keys: title, description, location, quote, quoteAuthor, enabled. An
+// empty string clears a value taken from the image.
 void applySidecar(ImageMetadata &metadata, const QJsonObject &sidecar);
+
+// Merges changes into the sidecar of imagePath: values are set, null removes
+// a key, other keys in the file are kept. Without any keys left the file is removed.
+bool updateSidecar(const QString &imagePath, const QJsonObject &changes, QString *error = nullptr);
 
 QString formatCamera(const QString &make, const QString &model);
 QString formatAperture(double fNumber, const QLocale &locale);

@@ -13,6 +13,11 @@
     "renditions": "auto",
     "jpegQuality": 88
   },
+  "admin": {
+    "address": "0.0.0.0",
+    "port": 8080,
+    "maxUploadMB": 64
+  },
   "quotes": [
     { "text": "Die Natur ist das einzige Buch, das auf allen Blättern großen Inhalt bietet.", "author": "Johann Wolfgang von Goethe" },
     { "text": "In every walk with nature one receives far more than he seeks.", "author": "John Muir" },

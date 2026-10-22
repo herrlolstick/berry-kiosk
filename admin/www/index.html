@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>berry-kiosk</title>
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <section id="login" class="card login" hidden>
+    <h1>berry-kiosk</h1>
+    <form id="login-form">
+      <label>Benutzername <input name="username" value="admin" autocomplete="username" required></label>
+      <label>Passwort <input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit">Anmelden</button>
+      <p id="login-error" class="error" hidden></p>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+    <header>
+      <h1>berry-kiosk</h1>
+      <span id="user" class="muted"></span>
+      <button id="logout" class="secondary">Abmelden</button>
+    </header>
+
+    <main>
+      <section class="card">
+        <h2>Anzeige</h2>
+        <img id="screenshot" class="screenshot" alt="Bildschirmfoto der Anzeige">
+        <p id="display-status" class="muted">–</p>
+        <div class="buttons">
+          <button data-display="next">Nächstes Bild</button>
+          <button data-display="pause" class="secondary">Pause</button>
+          <button data-display="resume" class="secondary">Weiter</button>
+          <button id="screenshot-refresh" class="secondary">Foto aktualisieren</button>
+        </div>
+        <div id="showing" class="showing"></div>
+        <p id="display-error" class="error" hidden></p>
+      </section>
+
+      <section class="card">
+        <h2>Mediathek</h2>
+        <p id="library-status" class="muted">–</p>
+        <div class="buttons">
+          <button id="sync" class="secondary">Neu einlesen</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Hochladen</h2>
+        <div class="row">
+          <label>Album <select id="album"></select></label>
+          <label>Neues Album <input id="new-album" placeholder="z. B. reisen/norwegen"></label>
+          <button id="create-album" class="secondary">Anlegen</button>
+        </div>
+        <label id="dropzone" class="dropzone">
+          Bilder hierher ziehen oder auswählen
+          <input id="files" type="file" multiple accept="image/jpeg,image/png,image/webp">
+        </label>
+        <ul id="uploads" class="uploads"></ul>
+      </section>
+
+      <section class="card">
+        <div class="row heading">
+          <h2>Neueste Bilder</h2>
+          <button id="reload-media" class="secondary">Neu laden</button>
+        </div>
+        <p id="media-error" class="error" hidden></p>
+        <div id="media" class="grid"></div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

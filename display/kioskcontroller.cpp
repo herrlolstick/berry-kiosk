@@ -27,6 +27,14 @@ KioskController::KioskController(const Options &options, QObject *parent)
     reloadConfig();
 }
 
+void KioskController::setPaused(bool paused)
+{
+    if (m_paused == paused)
+        return;
+    m_paused = paused;
+    emit pausedChanged();
+}
+
 QString KioskController::deviceModel() const
 {
     return m_options.device.model.isEmpty() ? QSysInfo::prettyProductName() : m_options.device.model;

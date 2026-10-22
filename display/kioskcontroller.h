@@ -34,6 +34,7 @@ class KioskController : public QObject
     Q_PROPERTY(int maxTextureSize READ maxTextureSize CONSTANT)
     Q_PROPERTY(QString deviceModel READ deviceModel CONSTANT)
     Q_PROPERTY(bool debug READ debug CONSTANT)
+    Q_PROPERTY(bool paused READ paused WRITE setPaused NOTIFY pausedChanged)
 
 public:
     struct Options
@@ -64,10 +65,21 @@ public:
     int maxTextureSize() const { return m_options.maxTextureSize; }
     QString deviceModel() const;
     bool debug() const { return m_options.debug; }
+    bool paused() const { return m_paused; }
+    void setPaused(bool paused);
+    QString layoutId() const { return m_layout.value(QStringLiteral("id")).toString(); }
+
+    // Remote control from the admin service
+    void requestNext() { emit nextRequested(); }
+    // Called by slideshows when a picture starts to show
+    Q_INVOKABLE void reportShown(const QString &region, const QString &path) { emit imageShown(region, path); }
 
 signals:
     void configChanged();
     void renderChanged();
+    void pausedChanged();
+    void nextRequested();
+    void imageShown(const QString &region, const QString &path);
 
 private:
     void reloadConfig();
@@ -81,6 +93,7 @@ private:
     QVariantMap m_layout;
     berry::RenderDecision m_render;
     bool m_renderDecided = false;
+    bool m_paused = false;
     QSize m_screenSize;
     QFileSystemWatcher m_watcher;
     QTimer m_reloadTimer;

@@ -88,7 +88,29 @@ Item {
             previous.source = "" // frees the decoded image
             previous = null
         }
-        timer.restart()
+        if (!kiosk.paused)
+            timer.restart()
+    }
+
+    readonly property bool idle: started && pending === null && !fadeIn.running
+
+    // Remote control from the admin service
+    Connections {
+        target: slideshow.kiosk
+
+        function onPausedChanged() {
+            if (slideshow.kiosk.paused)
+                timer.stop()
+            else if (slideshow.idle)
+                timer.restart()
+        }
+
+        function onNextRequested() {
+            if (slideshow.idle) {
+                timer.stop()
+                slideshow.advance()
+            }
+        }
     }
 
     MediaSource {

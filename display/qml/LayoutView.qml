@@ -82,7 +82,10 @@ Item {
                 SlideshowRegion {
                     kiosk: view.kiosk
                     config: region.modelData
-                    onShown: path => view.setCurrentImage(region.regionId, path)
+                    onShown: path => {
+                        view.setCurrentImage(region.regionId, path)
+                        view.kiosk.reportShown(region.regionId, path)
+                    }
                 }
             }
 
