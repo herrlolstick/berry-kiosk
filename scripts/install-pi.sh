@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Builds berry-kiosk on the Raspberry Pi itself and installs it as a systemd service.
+# Builds berry-kiosk on the Raspberry Pi as a Debian package and installs it.
 # Target: Raspberry Pi OS Lite, 64-bit, based on Debian 13 "trixie" (Qt 6.8).
 #
 #   git clone https://github.com/herrlolstick/berry-kiosk.git
 #   cd berry-kiosk && ./scripts/install-pi.sh
+#
+# Faster: download the ready-made package from the GitHub releases and run
+#   sudo apt install ./berry-kiosk_<version>_arm64.deb
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,42 +17,28 @@ SERVICE_USER=berry-kiosk
 echo "==> Pakete installieren"
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-    build-essential cmake ninja-build \
-    qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools qt6-httpserver-dev qt6-websockets-dev \
+    build-essential cmake ninja-build dpkg-dev file \
+    qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools \
+    qt6-httpserver-dev qt6-websockets-dev \
     qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript \
     qt6-qpa-plugins qt6-image-formats-plugins libqt6sql6-sqlite libexiv2-dev libgl-dev libegl-dev \
     fonts-dejavu-core
 
 echo "==> Bauen"
-cmake -S "$REPO_DIR" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBERRY_BUILD_TESTS=OFF
+cmake -S "$REPO_DIR" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+    -DBERRY_BUILD_TESTS=OFF
 cmake --build "$BUILD_DIR"
-sudo cmake --install "$BUILD_DIR"
+(cd "$BUILD_DIR" && rm -f berry-kiosk_*.deb && cpack -G DEB)
 
-echo "==> Benutzer und Daten"
-if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-    sudo useradd --system --home-dir "$STATE_DIR" --shell /usr/sbin/nologin \
-        --groups video,render,input "$SERVICE_USER"
-fi
-sudo install -d -o "$SERVICE_USER" -g "$SERVICE_USER" "$STATE_DIR"
-# Group-writable so the login user can copy pictures in (e.g. with rsync)
-sudo install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 2775 "$STATE_DIR/media"
+echo "==> Installieren"
+# The package creates the user, the data directory, the udev rule and enables the services
+sudo apt-get install -y "$(ls "$BUILD_DIR"/berry-kiosk_*.deb)"
+# The login user may copy pictures into the media folder (after the next login)
 sudo usermod -aG "$SERVICE_USER" "$USER"
-if [ ! -f "$STATE_DIR/config.json" ]; then
-    sudo install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0644 "$REPO_DIR/config.example.json" "$STATE_DIR/config.json"
-fi
-
-echo "==> Dienste einrichten"
-for service in berry-kiosk-admin berry-kiosk-display; do
-    sudo install -m 0644 "$REPO_DIR/packaging/systemd/$service.service" /etc/systemd/system/
-done
-sudo systemctl daemon-reload
-sudo systemctl enable berry-kiosk-admin.service berry-kiosk-display.service
-sudo systemctl restart berry-kiosk-admin.service berry-kiosk-display.service
 
 echo "==> Zugang zur Verwaltung"
-AUTH_FILE="$STATE_DIR/state/auth.json"
-ADMIN="/usr/local/bin/berry-kiosk-admin --config $STATE_DIR/config.json --set-password"
-if sudo test -f "$AUTH_FILE"; then
+ADMIN="berry-kiosk-admin --config $STATE_DIR/config.json --set-password"
+if sudo test -f "$STATE_DIR/state/auth.json"; then
     echo "Passwort ist bereits gesetzt."
 elif [ -t 0 ]; then
     # Abbruch oder Tippfehler sollen die fertige Installation nicht als gescheitert melden
@@ -64,3 +53,7 @@ echo "  rsync -av ~/Bilder/Natur/ $USER@$(hostname).local:$STATE_DIR/media/"
 echo "Verwaltung: http://$(hostname).local:8080/"
 echo "Passwort setzen/ändern: sudo -u $SERVICE_USER $ADMIN"
 echo "Logs: journalctl -u berry-kiosk-display -u berry-kiosk-admin -f"
+echo
+echo "Optional, um den Bildschirm per Zeitplan wirklich abzuschalten (display.power):"
+echo "  Fernseher (HDMI-CEC): sudo apt install v4l-utils"
+echo "  Monitore (DDC/CI):    sudo apt install ddcutil && sudo usermod -aG i2c $SERVICE_USER"

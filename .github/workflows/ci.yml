@@ -21,15 +21,36 @@ jobs:
             qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools qt6-httpserver-dev \
             qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript \
             libqt6sql6-sqlite libexiv2-dev libgl-dev libegl-dev \
-            qt6-websockets-dev
+            qt6-websockets-dev dpkg-dev file
 
       - name: Bauen
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build build
 
       - name: Testen
         run: ctest --test-dir build --output-on-failure
+
+      - name: Paket bauen
+        run: |
+          cd build && cpack -G DEB
+          dpkg-deb --info berry-kiosk_*.deb
+          dpkg-deb --contents berry-kiosk_*.deb
+
+      # Installs the package into the container: catches broken dependencies
+      # and maintainer scripts (systemd itself does not run here)
+      - name: Paket installieren
+        run: |
+          apt-get install -y ./build/berry-kiosk_*.deb
+          id berry-kiosk
+          test -f /var/lib/berry-kiosk/config.json
+          test -x /usr/bin/berry-kiosk-display && test -x /usr/bin/berry-kiosk-admin
+          berry-kiosk-admin --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: berry-kiosk-deb-arm64
+          path: build/berry-kiosk_*.deb
 
   macos:
     name: macOS (Entwicklung)

@@ -1,0 +1,3 @@
+# berry-kiosk: restart the display when a screen is plugged in or out, so it
+# picks the new screen's mode and render tier (eglfs cannot switch on the fly).
+SUBSYSTEM=="drm", ACTION=="change", ENV{HOTPLUG}=="1", RUN+="/bin/systemctl --no-block try-restart berry-kiosk-display.service"

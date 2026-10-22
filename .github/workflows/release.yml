@@ -1,0 +1,56 @@
+name: Release
+
+# A tag like v1.0.0 builds the Debian package for Raspberry Pi OS (arm64)
+# and publishes it as a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  deb-arm64:
+    name: Paket für Raspberry Pi OS (arm64)
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Pakete installieren
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build dpkg-dev file \
+            qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools \
+            qt6-httpserver-dev qt6-websockets-dev \
+            qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtqml-workerscript \
+            libqt6sql6-sqlite libexiv2-dev libgl-dev libegl-dev
+
+      - name: Version prüfen
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^ *VERSION \([0-9.]*\)$/\1/p' CMakeLists.txt | head -1)
+          if [ "v$version" != "$TAG" ]; then
+            echo "Tag $TAG passt nicht zu VERSION $version in CMakeLists.txt" >&2
+            exit 1
+          fi
+
+      - name: Bauen und testen
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+      - name: Paket bauen
+        run: |
+          cd build && cpack -G DEB
+          sha256sum berry-kiosk_*.deb > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            build/berry-kiosk_*.deb
+            build/SHA256SUMS
+          generate_release_notes: true

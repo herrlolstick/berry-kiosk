@@ -3,12 +3,15 @@
 #include "config.h"
 #include "deviceinfo.h"
 #include "rendertier.h"
+#include "schedule.h"
 
 #include <QFileSystemWatcher>
 #include <QObject>
 #include <QSize>
 #include <QTimer>
 #include <QVariantMap>
+
+#include <optional>
 #include <QtQmlIntegration>
 
 // Bridge between the configuration and QML: exposes the active layout and the
@@ -36,6 +39,8 @@ class KioskController : public QObject
     Q_PROPERTY(QString deviceModel READ deviceModel CONSTANT)
     Q_PROPERTY(bool debug READ debug CONSTANT)
     Q_PROPERTY(bool paused READ paused WRITE setPaused NOTIFY pausedChanged)
+    Q_PROPERTY(bool screenOff READ screenOff NOTIFY screenOffChanged)
+    Q_PROPERTY(bool publicMode READ publicMode CONSTANT)
 
 public:
     struct Options
@@ -47,6 +52,9 @@ public:
         // With eglfs the KMS mode is fixed at startup, so a new maxRender
         // needs a restart (systemd brings the display back up).
         bool restartOnModeChange = false;
+        // Profile "public": no keyboard shortcuts at all (read once at start,
+        // eglfs input is switched off before the platform starts)
+        bool publicMode = false;
     };
 
     explicit KioskController(const Options &options, QObject *parent = nullptr);
@@ -77,6 +85,11 @@ public:
     // Layout the schedule asks for; empty = the configured active layout
     void setScheduledLayout(const QString &id);
 
+    bool screenOff() const { return m_screenOff; }
+    bool publicMode() const { return m_options.publicMode; }
+    // Switches the screen by hand until the schedule next changes its mind
+    void setScreenOn(bool on);
+
     // Remote control from the admin service
     void requestNext() { emit nextRequested(); }
     // Called by slideshows when a picture starts to show
@@ -87,6 +100,7 @@ signals:
     void layoutChanged();
     void renderChanged();
     void pausedChanged();
+    void screenOffChanged();
     void nextRequested();
     void imageShown(const QString &region, const QString &path);
 
@@ -97,6 +111,9 @@ private:
     void writeDisplayState();
     // Preview before schedule before the configured active layout
     void updateLayout();
+    void evaluateSchedule();
+    void setScreenOff(bool off);
+    void switchScreenPower(bool on);
 
     Options m_options;
     berry::Config m_config;
@@ -105,6 +122,11 @@ private:
     QVariantMap m_previewLayout;
     QTimer m_previewTimer;
     QString m_scheduledLayout;
+    QList<berry::ScheduleRule> m_schedule;
+    berry::ScheduleState m_scheduleState;
+    std::optional<bool> m_manualScreenOff;
+    bool m_screenOff = false;
+    QTimer m_scheduleTimer;
     berry::RenderDecision m_render;
     bool m_renderDecided = false;
     bool m_paused = false;

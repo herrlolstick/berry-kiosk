@@ -26,7 +26,7 @@
 Zwei getrennte Prozesse: Stürzt die Verwaltung ab oder verarbeitet sie gerade viele
 Uploads, läuft die Diashow ungestört weiter. Beide teilen sich `libberrycore`.
 
-Stand Meilenstein 7: In `berry-kiosk-admin` läuft die Web-API (`QHttpServer`,
+Stand Meilenstein 8: In `berry-kiosk-admin` läuft die Web-API (`QHttpServer`,
 `admin/apiserver.*`) im Hauptthread, Abgleich und Varianten (`core/library.*`,
 `core/renditions.*`) in einem eigenen Thread, Bild für Bild, damit neue
 Abgleich-Anfragen dazwischenkommen. Die API liest die Mediathek nur lesend; ihre
@@ -52,6 +52,21 @@ Seit Meilenstein 6/7: Der Layout-Editor schickt ungespeicherte Layouts über
 und fällt nach zwei Übergängen unter 20 fps auf Überblenden zurück. `SlideSlot` hält
 ein Bild samt Ken-Burns-Bewegung und, bei `contain`, einen unscharfen Hintergrund aus
 einem winzigen Decode (`image://media/backdrop/…`), den die GPU hochskaliert.
+
+Seit Meilenstein 8 (Betrieb): Der Zeitplan (`core/schedule.*`, `schedule` in
+`config.json`) läuft im Anzeigeprozess, damit er auch ohne Admin-Dienst greift.
+`KioskController` wertet ihn alle 15 s aus, setzt das Zeitplan-Layout und schaltet
+den Bildschirm aus: Das Layout wird entladen (nichts rendert), und je nach
+`display.power` laufen fest einkompilierte Befehle (`cec-ctl` für HDMI-CEC,
+`ddcutil` für DDC/CI). Beliebige Befehle aus der Konfiguration gibt es bewusst nicht,
+weil `config.json` über die Web-API änderbar ist. Der Socket-Befehl `screen` und
+`POST /api/display/screen` schalten von Hand, bis der Zeitplan das nächste Mal
+wechselt. Beide Dienste melden sich per `sd_notify` (`core/sdnotify.*`, ohne
+libsystemd) bei systemd bereit und pingen den Watchdog aus dem Haupt- bzw.
+GUI-Thread. Profil `public`: Die Anzeige schaltet unter eglfs die Eingabegeräte ab
+und kennt keine Tastenkürzel, Admin-Sitzungen laufen 2 Stunden, `admin.enabled`
+kann die Web-API ganz abschalten. Eine udev-Regel startet die Anzeige beim
+HDMI-Hotplug neu.
 
 Die Web-Oberfläche (`admin/www/`) ist reines JavaScript mit ES-Modulen und CSS, ohne
 Build-Schritt und ohne npm-Abhängigkeiten, als Qt-Ressourcen in den Admin-Dienst
@@ -92,7 +107,7 @@ Gebaut (Meilenstein 5) als ES-Module ohne Build-Schritt statt der ursprünglich
 geplanten Svelte-SPA: Der Pi baut sie ohne Node.js, und es gibt keine
 npm-Abhängigkeiten. Ausgeliefert vom Admin-Server:
 
-- **Übersicht** – Live-Screenshot des Kiosks, Status, nächstes Bild/Pause, Mediathek und Speicher
+- **Übersicht** – Live-Screenshot des Kiosks, Status, nächstes Bild/Pause, Bildschirm an/aus, Mediathek und Speicher
 - **Mediathek** – Raster mit Filtern und Suche, Mehrfachauswahl (zeigen, ausblenden,
   verschieben, löschen), Detailansicht mit EXIF und Bearbeiten von Titel/Ort/Zitat
 - **Hochladen** – Drag & Drop auch ganzer Ordner, Warteschlange mit Fortschritt
@@ -102,8 +117,5 @@ npm-Abhängigkeiten. Ausgeliefert vom Admin-Server:
   Eigenschaften und Übergang pro Region, „Auf Kiosk vorschauen“ mit Bildschirmfoto,
   Aktivieren, Zitate bearbeiten (`js/view-layouts.js`, `js/layout-editor.js`,
   `js/layout-model.js`, `js/layout-quotes.js`)
-
-Noch offen:
-
-- **Zeitplan** – Layout je Uhrzeit, Bildschirm aus
-- **Profil** `home`/`public`
+- **Zeitplan** – Regeln je Wochentag und Uhrzeit: welches Layout, wann der Bildschirm aus ist
+- Übersicht mit Schalter „Bildschirm an/aus“; Profil `home`/`public` über `config.json`

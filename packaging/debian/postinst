@@ -1,0 +1,42 @@
+#!/bin/sh
+# berry-kiosk: system user, data directory and services
+set -e
+
+STATE=/var/lib/berry-kiosk
+USER=berry-kiosk
+
+if [ "$1" = "configure" ]; then
+    if ! getent passwd "$USER" >/dev/null; then
+        useradd --system --user-group --home-dir "$STATE" --no-create-home \
+            --shell /usr/sbin/nologin --comment "berry-kiosk" "$USER"
+    fi
+    # GPU, input devices and (for HDMI-CEC) /dev/cec*
+    for group in video render input; do
+        if getent group "$group" >/dev/null; then
+            usermod -aG "$group" "$USER"
+        fi
+    done
+
+    install -d -o "$USER" -g "$USER" -m 0750 "$STATE"
+    # Group-writable so people in the group berry-kiosk can copy pictures in
+    install -d -o "$USER" -g "$USER" -m 2775 "$STATE/media"
+    if [ ! -e "$STATE/config.json" ]; then
+        install -o "$USER" -g "$USER" -m 0640 /usr/share/berry-kiosk/config.example.json "$STATE/config.json"
+    fi
+
+    if command -v udevadm >/dev/null; then
+        udevadm control --reload-rules || true
+    fi
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        systemctl enable berry-kiosk-admin.service berry-kiosk-display.service >/dev/null
+        systemctl restart berry-kiosk-admin.service berry-kiosk-display.service || true
+    fi
+
+    if [ ! -e "$STATE/state/auth.json" ]; then
+        echo "berry-kiosk: Passwort für die Verwaltung setzen mit"
+        echo "  sudo -u $USER berry-kiosk-admin --config $STATE/config.json --set-password"
+    fi
+fi
+
+exit 0

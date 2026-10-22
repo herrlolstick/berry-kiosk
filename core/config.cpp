@@ -71,6 +71,11 @@ DisplaySettings Config::display() const
     settings.maxRender = maxRenderFromString(display.value(u"maxRender").toString());
     const int rotation = display.value(u"rotation").toInt();
     settings.rotation = rotation % 90 == 0 ? (rotation % 360 + 360) % 360 : 0;
+    const QString power = display.value(u"power").toString().trimmed().toLower();
+    if (power == u"cec")
+        settings.power = ScreenPower::Cec;
+    else if (power == u"ddc")
+        settings.power = ScreenPower::Ddc;
     return settings;
 }
 
@@ -135,6 +140,7 @@ AdminSettings Config::admin() const
     const int port = admin.value(u"port").toInt(settings.port);
     if (port > 0 && port <= 65535)
         settings.port = quint16(port);
+    settings.enabled = admin.value(u"enabled").toBool(true);
     const int maxUploadMB = admin.value(u"maxUploadMB").toInt(64);
     settings.maxUploadBytes = qint64(qBound(1, maxUploadMB, 1024)) * 1024 * 1024;
     return settings;
@@ -148,6 +154,16 @@ QJsonObject Config::layoutById(const QString &id) const
             return layout;
     }
     return {};
+}
+
+bool Config::isPublic() const
+{
+    return m_json.value(u"profile").toString().trimmed().toLower() == u"public";
+}
+
+QJsonArray Config::schedule() const
+{
+    return m_json.value(u"schedule").toArray();
 }
 
 QString Config::locale() const

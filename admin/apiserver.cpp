@@ -188,6 +188,9 @@ ApiServer::ApiServer(const QString &configPath, DisplayLink *display, QObject *p
     , m_display(display)
 {
     m_uptime.start();
+    // A public kiosk's admin should not stay logged in on some shared device
+    if (config().isPublic())
+        m_sessions = SessionStore(2 * 60 * 60 * 1000);
     addRoutes();
 }
 
@@ -365,6 +368,17 @@ void ApiServer::addRoutes()
             return std::move(*denied);
         return displayCommand(QStringLiteral("endPreview"));
     });
+    m_http.route(QStringLiteral("/api/display/screen"), Method::Post, [this](const QHttpServerRequest &request) {
+        if (auto denied = checkAccess(request, true))
+            return std::move(*denied);
+        const auto body = jsonBody(request);
+        if (!body || !body->value(u"on").isBool())
+            return fail(Status::BadRequest, QStringLiteral("JSON mit on: true oder false erwartet"));
+        QString error;
+        if (m_display->request(QStringLiteral("screen"), {{QStringLiteral("on"), body->value(u"on").toBool()}}, 2000, &error).isEmpty())
+            return fail(Status::ServiceUnavailable, error);
+        return empty();
+    });
     m_http.route(QStringLiteral("/api/display/screenshot"), Method::Get, [this](const QHttpServerRequest &request) {
         if (auto denied = checkAccess(request, false))
             return std::move(*denied);
@@ -455,6 +469,7 @@ QHttpServerResponse ApiServer::status()
             display.insert(QStringLiteral("paused"), reply.value(QStringLiteral("paused")).toBool());
             display.insert(QStringLiteral("layout"), reply.value(QStringLiteral("layout")).toString());
             display.insert(QStringLiteral("previewing"), reply.value(QStringLiteral("previewing")).toBool());
+            display.insert(QStringLiteral("screenOff"), reply.value(QStringLiteral("screenOff")).toBool());
         }
         // Map the originals the display reports to library ids, for thumbnails
         QJsonArray showing;

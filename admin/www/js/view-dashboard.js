@@ -57,6 +57,9 @@ export default {
     const hint = el('p', { className: 'muted small', hidden: true, textContent: 'Anzeige nicht verbunden – läuft berry-kiosk-display?' });
     const nextButton = el('button', { className: 'primary', textContent: 'Nächstes Bild', onclick: () => command('next') });
     const pauseButton = el('button', { textContent: 'Pause', onclick: () => command(status?.display?.paused ? 'resume' : 'pause') });
+    const screenButton = el('button', { className: 'secondary', textContent: 'Bildschirm aus', onclick: toggleScreen });
+    const screenNote = el('p', { className: 'muted small', hidden: true, textContent: 'Von Hand geschaltet – gilt bis zur nächsten Zeitplan-Änderung.' });
+    let manualScreen = false;
 
     // Läuft gerade
     const showing = el('div', { className: 'thumb-grid dash-showing' });
@@ -83,7 +86,8 @@ export default {
           screen,
           el('div', { className: 'row dash-screen-bar' }, [screenTime, el('span', { className: 'spacer' }), refreshButton]),
           badges,
-          el('div', { className: 'row' }, [nextButton, pauseButton]),
+          el('div', { className: 'row' }, [nextButton, pauseButton, screenButton]),
+          screenNote,
           hint),
         el('div', { className: 'stack' }, [
           showingCard,
@@ -108,6 +112,8 @@ export default {
     function renderDisplay(display = {}) {
       const connected = !!display.connected;
       const items = [badge(connected ? 'verbunden' : 'getrennt', connected ? 'accent' : 'warning')];
+      if (display.screenOff) items.push(badge('Bildschirm aus', 'warning'));
+      if (display.previewing) items.push(badge('Vorschau läuft', 'accent'));
       if (display.paused) items.push(badge('pausiert', 'warning'));
       if (display.renderTier) items.push(badge(`Render-Stufe ${display.renderTier}`));
       if (display.layout) items.push(badge(`Layout „${display.layout}“`));
@@ -119,6 +125,9 @@ export default {
       nextButton.disabled = !connected || busy;
       pauseButton.disabled = !connected || busy;
       pauseButton.textContent = display.paused ? 'Weiter' : 'Pause';
+      screenButton.disabled = !connected || busy;
+      screenButton.textContent = display.screenOff ? 'Bildschirm an' : 'Bildschirm aus';
+      screenNote.hidden = !manualScreen;
       refreshButton.disabled = !connected;
 
       const size = display.screenSize || display.renderSize;
@@ -223,6 +232,24 @@ export default {
         // The cross-fade takes a moment; photograph the new picture, not the old one
         if (name === 'next') later(loadScreenshot, 2500);
         await loadStatus();
+      } catch (error) {
+        toast(error.message, 'error');
+      } finally {
+        busy = false;
+        renderDisplay(status?.display);
+      }
+    }
+
+    async function toggleScreen() {
+      const on = !!status?.display?.screenOff;
+      busy = true;
+      renderDisplay(status?.display);
+      try {
+        await post('/api/display/screen', { on });
+        manualScreen = true;
+        toast(on ? 'Bildschirm eingeschaltet' : 'Bildschirm ausgeschaltet');
+        await loadStatus();
+        if (on) later(loadScreenshot, 2500);
       } catch (error) {
         toast(error.message, 'error');
       } finally {

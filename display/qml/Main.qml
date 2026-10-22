@@ -25,8 +25,9 @@ Window {
         height: portrait ? parent.width : parent.height
         rotation: window.kiosk.rotation
 
-        // Layout on screen; switches go through a short fade to black
-        property var shownLayout: window.kiosk.layout
+        // Layout on screen; switches go through a short fade to black. With the
+        // screen off nothing is loaded at all, so nothing renders.
+        property var shownLayout: window.kiosk.screenOff ? ({}) : window.kiosk.layout
 
         LayoutView {
             anchors.fill: parent
@@ -47,7 +48,7 @@ Window {
             id: layoutSwitch
 
             NumberAnimation { target: curtain; property: "opacity"; to: 1; duration: 400; easing.type: Easing.InQuad }
-            ScriptAction { script: canvas.shownLayout = window.kiosk.layout }
+            ScriptAction { script: canvas.shownLayout = window.kiosk.screenOff ? ({}) : window.kiosk.layout }
             NumberAnimation { target: curtain; property: "opacity"; to: 0; duration: 600; easing.type: Easing.OutQuad }
         }
 
@@ -55,6 +56,10 @@ Window {
             target: window.kiosk
 
             function onLayoutChanged() {
+                layoutSwitch.restart()
+            }
+
+            function onScreenOffChanged() {
                 layoutSwitch.restart()
             }
         }
@@ -75,13 +80,13 @@ Window {
     // Keys only work while developing; a kiosk must not be closable from a keyboard
     Shortcut {
         sequence: "F1"
-        enabled: window.windowed || window.kiosk.debug
+        enabled: !window.kiosk.publicMode && (window.windowed || window.kiosk.debug)
         onActivated: debugOverlay.visible = !debugOverlay.visible
     }
 
     Shortcut {
         sequences: [StandardKey.Quit, "Esc"]
-        enabled: window.windowed || window.kiosk.debug
+        enabled: !window.kiosk.publicMode && (window.windowed || window.kiosk.debug)
         onActivated: Qt.quit()
     }
 }

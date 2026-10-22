@@ -11,6 +11,8 @@ qt_add_library(berrycore STATIC
     mediafiles.h mediafiles.cpp
     renditions.h renditions.cpp
     rendertier.h rendertier.cpp
+    schedule.h schedule.cpp
+    sdnotify.h sdnotify.cpp
     state.h state.cpp
 )
 

@@ -5,9 +5,10 @@ photography in a living room or a public space. It runs without a desktop,
 straight on the screen (Qt Quick via eglfs/KMS), works on low-cost boards like
 the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 
-> **Status:** milestone 7 – slideshow with transitions, widgets, media library,
-> image pipeline, admin web API and the web UI incl. the layout editor. Operations
-> (schedule, screen off, public profile) are next, see the [roadmap](#roadmap).
+> **Status:** milestone 8 – slideshow with transitions, widgets, media library,
+> image pipeline, admin web API, the web UI incl. the layout editor, and operations
+> (schedule, screen off, public profile, watchdog, HDMI hotplug). Packaging is next,
+> see the [roadmap](#roadmap).
 
 ## Features
 
@@ -18,6 +19,9 @@ the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 - **Media library** (SQLite) with prepared 1080p/2160p renditions and thumbnails, kept up to date in the background
 - **Web UI** for phone and desktop: media library with search, filters and bulk actions, uploads (whole folders too), albums, editing titles and quotes, remote control of the display (next picture, pause, live screenshot)
 - **Admin web API** behind it, with login and CSRF protection
+- **Schedule:** a layout per time of day and weekday, screen off at night – with HDMI-CEC standby for TVs or DDC/CI for monitors
+- **Public profile** for kiosks in public spaces: no input devices, short admin sessions, the web API can be switched off entirely
+- **Self-healing:** systemd watchdog for display and admin service, the display restarts on HDMI hotplug
 - Images are decoded straight to their display size – even 24 MP JPEGs run on boards with 512 MB RAM
 - EXIF orientation, portrait screens (`rotation`), panoramas are capped at the GPU texture limit
 - `config.json` is reloaded while running
@@ -85,11 +89,12 @@ binary) on port 8080: open `http://<pi>.local:8080/`.
 
 | View | What it does |
 |---|---|
-| Übersicht | Live screenshot of the kiosk, status, next picture / pause, library and storage, latest pictures |
+| Übersicht | Live screenshot of the kiosk, status, next picture / pause, screen on/off, library and storage, latest pictures |
 | Mediathek | Grid with infinite scroll; filter by album, search, shown/hidden, sort; select pictures to show, hide, move or delete them; detail view with a large preview, metadata and editing of title, location, description, quote and "in der Diashow zeigen", arrow keys and swipe for the next picture |
 | Hochladen | Drop zone for files and whole folders (sub folders become sub albums), queue with progress and retries; one file at a time, as the server holds an upload in memory |
 | Alben | Album tree with covers and counts: create, rename/move, delete (to the trash) |
 | Layouts | Grid editor: drag and resize regions on the grid, templates (full screen, with clock and image info, collage, portrait pair), properties per region (album, order, interval, fit, transition; widget style), undo/redo, keyboard (arrows move, Shift+arrows resize, Delete removes); "Auf Kiosk vorschauen" shows the unsaved layout on the kiosk for 60 s and fetches a screenshot; activate a layout; a "Zitate" tab for the global quotes |
+| Zeitplan | Rules per weekday and time: which layout to show, when the screen is off |
 | Einstellungen | Change the password; language, maximum resolution, rotation, renditions, JPEG quality, maximum upload size |
 
 It is plain ES modules and CSS – no build step and no npm dependencies, so the Pi
@@ -176,6 +181,7 @@ All under `/api`, JSON in and out, errors as `{ "error": "…" }`.
 | `GET` | `/config` | `config.json` |
 | `PUT` | `/config` | Validated; the previous version is kept as `config.json.bak` |
 | `POST` | `/display/next`, `/display/pause`, `/display/resume` | Remote control |
+| `POST` | `/display/screen` | `{ "on": true\|false }`: switch the screen by hand; holds until the schedule next changes |
 | `GET` | `/display/screenshot?maxWidth=` | Live screenshot (JPEG) |
 | `POST` | `/display/preview` | `{ "layout", "seconds" }` (1–600, default 60): show an unsaved layout on the kiosk for a while, checked like a saved one |
 | `DELETE` | `/display/preview` | End the preview now |
@@ -246,9 +252,11 @@ See [`config.example.json`](config.example.json). Top level:
 
 | Field | Meaning |
 |---|---|
+| `profile` | `"home"` (default) or `"public"`, see [Running in public spaces](#running-in-public-spaces) |
 | `locale` | Language for dates and numbers, e.g. `"de_DE"`, `"en_GB"` |
 | `display.maxRender` | `"auto"` (4K when possible) or `"1080p"` |
 | `display.rotation` | `0`, `90`, `180`, `270` – for screens mounted in portrait |
+| `display.power` | How the schedule switches the screen off: `"none"` (black picture, default), `"cec"` or `"ddc"` – see [Schedule](#schedule) |
 | `media.path` | Picture folder, relative to the configuration file or absolute |
 | `library.renditions` | `"auto"` (the display's tier) or a list such as `["1080p", "2160p"]` |
 | `library.jpegQuality` | JPEG quality of renditions, `50` … `100`, default `88` |
@@ -257,6 +265,8 @@ See [`config.example.json`](config.example.json). Top level:
 | `admin.address` | `"0.0.0.0"` (every interface) or `"127.0.0.1"` (only the device, e.g. behind a reverse proxy) |
 | `admin.port` | Port of the API and web UI, default `8080` |
 | `admin.maxUploadMB` | Largest upload in MB, default `64` |
+| `admin.enabled` | `false` switches the web API and UI off; the library is still kept up to date. Default `true` |
+| `schedule` | Layouts and screen off by time, see [Schedule](#schedule) |
 | `quotes` | Global quotes: `[{ "text": "…", "author": "…" }]` or plain strings |
 | `activeLayout` | `id` of the layout to show |
 | `layouts[].name` | Display name in the web UI (optional; `id` stays stable) |
@@ -331,6 +341,46 @@ Every widget accepts a `style` object:
 
 Text always scales to the size of its region, so widgets look the same at 1080p and 4K.
 
+### Schedule
+
+`schedule` is a list of rules; at any moment the last rule that matches wins.
+Each rule has `days`, `from`, `to` and either `layout` (a layout `id`) or
+`"screen": "off"`:
+
+```json
+"schedule": [
+  { "days": "mo-fr", "from": "07:00", "to": "22:30", "layout": "tag" },
+  { "days": "sa,so", "from": "09:00", "to": "23:00", "layout": "wochenende" },
+  { "days": "daily", "from": "22:30", "to": "07:00", "screen": "off" }
+]
+```
+
+- `days`: `"daily"`/`"täglich"`, German or English abbreviations or names with
+  ranges and lists (`"mo-fr"`, `"sa,so"`, `"fri-mon"` wraps around the weekend),
+  or an array of names or numbers 1 (Monday) … 7. Missing = every day.
+- `from`/`to`: `HH:mm` (`7:00` works too); `from` is included, `to` is not. A `to`
+  before `from` runs past midnight: the morning part belongs to the day after a
+  listed day, so `"fr"` 22:00–02:00 covers Saturday 01:00. `from` = `to` means the
+  whole day.
+- No matching rule: the `activeLayout` shows and the screen is on. A preview from
+  the layout editor still takes precedence over the schedule.
+- Invalid rules are skipped with a message in the display's log.
+- The schedule runs inside the display process, so it also works when the admin
+  service is stopped. The screen switch in the web UI (`POST /api/display/screen`)
+  holds until the schedule next changes its mind.
+
+With the screen off the display unloads the layout (nothing renders) and, with
+`display.power`, sends the screen to sleep:
+
+| `display.power` | Off / on | Needs |
+|---|---|---|
+| `"none"` | black picture only | – |
+| `"cec"` | `cec-ctl -d0 --playback --to 0 --standby` / `--image-view-on` (TVs) | `v4l-utils` |
+| `"ddc"` | `ddcutil setvcp d6 04` / `ddcutil setvcp d6 01` (monitors with DDC/CI) | `ddcutil`, the service user in the `i2c` group |
+
+These fixed commands are the only ones: there is deliberately no setting for a
+free-form command, because `config.json` can be edited through the web API.
+
 ### Per-picture details (sidecar files)
 
 A JSON file with the picture's name sits next to it (`elk.jpg` → `elk.json`) and
@@ -347,6 +397,26 @@ overrides the embedded metadata:
 
 An empty string hides a value that is embedded in the picture. `"enabled": false`
 hides the picture from the slideshow.
+
+## Running in public spaces
+
+- Set `"profile": "public"`: the display ignores keyboards, mice and touch screens
+  (eglfs input is switched off) and has no shortcuts even in debug mode; admin
+  sessions last 2 hours instead of 12; the admin service warns in its log when it
+  listens on every interface.
+- Restrict the admin service: `admin.address` `"127.0.0.1"` (only via SSH tunnel or
+  a reverse proxy on the device) or `admin.enabled: false` (manage pictures by
+  copying files, e.g. with rsync or Syncthing).
+- Read-only root file system, so power cuts cannot corrupt the SD card:
+  `sudo raspi-config nonint do_overlayfs 0` (and reboot). Everything written then
+  vanishes on reboot, so put the data directory on a separate writable partition or
+  a USB stick and point `media.path` and `library.database`/`library.cache`/
+  `library.state`/`library.trash` there.
+- Both services run under systemd with a watchdog: a display or admin service that
+  stops responding is restarted automatically.
+- The udev rule `packaging/udev/99-berry-kiosk-hotplug.rules` (installed by the
+  install script) restarts the display when a screen is plugged in or swapped, so
+  it picks the new screen's mode and render tier.
 
 ## Project layout
 
@@ -370,7 +440,7 @@ docs/        architecture and planning (German)
 5. ✅ **Web UI I** – media library, uploads, albums and settings; moved files keep their renditions
 6. ✅ **Web UI II** – layout editor with preview on the kiosk, transition settings, quotes
 7. ✅ **Transitions** – slide, zoom, Ken Burns, mix, blurred backdrop, automatic fallback to fades
-8. **Operations** – schedule, screen off (DPMS/CEC), public profile, read-only root, watchdog, HDMI hotplug
+8. ✅ **Operations** – schedule, screen off (CEC/DDC), public profile, read-only root, watchdog, HDMI hotplug
 9. **Distribution** – `.deb` packages and a ready-made SD card image
 
 ## License

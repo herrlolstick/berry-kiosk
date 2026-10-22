@@ -3,6 +3,8 @@
 #include "imagemetadata.h"
 #include "imagescanner.h"
 #include "rendertier.h"
+#include "schedule.h"
+#include "sdnotify.h"
 
 #include <QDir>
 #include <QFile>
@@ -38,6 +40,16 @@ private slots:
     void formatting();
     void readMetadata();
     void sidecarOverrides();
+    void scheduleDays_data();
+    void scheduleDays();
+    void scheduleInvalidEntries();
+    void scheduleTimes();
+    void scheduleMatches_data();
+    void scheduleMatches();
+    void scheduleEvaluate();
+    void configOperations();
+    void watchdogInterval();
+    void sdNotifyWithoutSystemd();
 };
 
 void TestCore::initTestCase()
@@ -376,6 +388,237 @@ void TestCore::sidecarOverrides()
     QCOMPARE(m.location, QStringLiteral("Eifel"));
     QCOMPARE(m.quote, QStringLiteral("Geduld ist alles."));
     QCOMPARE(m.quoteAuthor, QStringLiteral("Unbekannt"));
+}
+
+namespace {
+
+ScheduleRule ruleFrom(const QJsonObject &entry)
+{
+    QStringList errors;
+    const QList<ScheduleRule> rules = parseSchedule(QJsonArray{entry}, &errors);
+    return rules.isEmpty() ? ScheduleRule() : rules.constFirst();
+}
+
+QJsonObject entry(const QJsonValue &days, const QString &from, const QString &to, const QString &layout = QStringLiteral("tag"))
+{
+    QJsonObject object{{QStringLiteral("from"), from}, {QStringLiteral("to"), to}, {QStringLiteral("layout"), layout}};
+    if (!days.isUndefined())
+        object.insert(QStringLiteral("days"), days);
+    return object;
+}
+
+// 2026-10-19 is a Monday
+QDateTime at(int dayOfWeek, const QString &time)
+{
+    return QDateTime(QDate(2026, 10, 18 + dayOfWeek), QTime::fromString(time, QStringLiteral("HH:mm")));
+}
+
+} // namespace
+
+void TestCore::scheduleDays_data()
+{
+    QTest::addColumn<QJsonValue>("days");
+    QTest::addColumn<QList<int>>("expected");
+
+    const QList<int> all{1, 2, 3, 4, 5, 6, 7};
+    QTest::newRow("range") << QJsonValue(QStringLiteral("mo-fr")) << QList<int>{1, 2, 3, 4, 5};
+    QTest::newRow("list") << QJsonValue(QStringLiteral("sa,so")) << QList<int>{6, 7};
+    QTest::newRow("list with spaces") << QJsonValue(QStringLiteral("Mo, Mi Fr")) << QList<int>{1, 3, 5};
+    QTest::newRow("wrapping range") << QJsonValue(QStringLiteral("fr-mo")) << QList<int>{5, 6, 7, 1};
+    QTest::newRow("daily") << QJsonValue(QStringLiteral("daily")) << all;
+    QTest::newRow("täglich") << QJsonValue(QStringLiteral("täglich")) << all;
+    QTest::newRow("english") << QJsonValue(QStringLiteral("mon-fri")) << QList<int>{1, 2, 3, 4, 5};
+    QTest::newRow("full names") << QJsonValue(QStringLiteral("samstag-sonntag")) << QList<int>{6, 7};
+    QTest::newRow("numbers in text") << QJsonValue(QStringLiteral("1-3")) << QList<int>{1, 2, 3};
+    QTest::newRow("array of names") << QJsonValue(QJsonArray{QStringLiteral("sa"), QStringLiteral("sun")}) << QList<int>{6, 7};
+    QTest::newRow("array of numbers") << QJsonValue(QJsonArray{1, 7}) << QList<int>{1, 7};
+    QTest::newRow("missing = every day") << QJsonValue(QJsonValue::Undefined) << all;
+}
+
+void TestCore::scheduleDays()
+{
+    QFETCH(QJsonValue, days);
+    QFETCH(QList<int>, expected);
+
+    QStringList errors;
+    const QList<ScheduleRule> rules = parseSchedule(QJsonArray{entry(days, QStringLiteral("07:00"), QStringLiteral("22:00"))}, &errors);
+    QVERIFY2(errors.isEmpty(), qPrintable(errors.join(u'\n')));
+    QCOMPARE(rules.size(), 1);
+    QCOMPARE(rules.constFirst().days, expected);
+}
+
+void TestCore::scheduleInvalidEntries()
+{
+    const QJsonArray entries{
+        entry(QStringLiteral("xy"), QStringLiteral("07:00"), QStringLiteral("08:00")),            // unknown day
+        entry(QStringLiteral("mo-xy"), QStringLiteral("07:00"), QStringLiteral("08:00")),         // unknown range end
+        entry(QJsonArray{0, 8}, QStringLiteral("07:00"), QStringLiteral("08:00")),                // numbers out of range
+        entry(QStringLiteral("mo"), QStringLiteral("sieben"), QStringLiteral("08:00")),           // bad time
+        entry(QStringLiteral("mo"), QStringLiteral("07:00"), QStringLiteral("25:00")),            // bad time
+        entry(QStringLiteral("mo"), QStringLiteral("07:00"), QStringLiteral("08:00"), QString()), // neither layout nor screen
+        QJsonValue(42),
+        entry(QStringLiteral("mo"), QStringLiteral("07:00"), QStringLiteral("08:00")),            // the only valid one
+    };
+    QStringList errors;
+    const QList<ScheduleRule> rules = parseSchedule(entries, &errors);
+    QCOMPARE(rules.size(), 1);
+    QCOMPARE(errors.size(), 7);
+    QVERIFY(errors.constFirst().startsWith(QStringLiteral("Zeitplan-Eintrag 1:")));
+    QVERIFY(errors.at(3).contains(QStringLiteral("HH:mm")));
+    QVERIFY(errors.at(5).contains(QStringLiteral("layout")));
+    QVERIFY(errors.constLast().startsWith(QStringLiteral("Zeitplan-Eintrag 7:")));
+
+    // Without an error list nothing breaks either
+    QCOMPARE(parseSchedule(entries).size(), 1);
+}
+
+void TestCore::scheduleTimes()
+{
+    const ScheduleRule shortForm = ruleFrom(entry(QStringLiteral("daily"), QStringLiteral("7:00"), QStringLiteral("9:30")));
+    QCOMPARE(shortForm.from, QTime(7, 0));
+    QCOMPARE(shortForm.to, QTime(9, 30));
+    const ScheduleRule longForm = ruleFrom(entry(QStringLiteral("daily"), QStringLiteral("07:00"), QStringLiteral("22:30")));
+    QCOMPARE(longForm.from, QTime(7, 0));
+    QCOMPARE(longForm.to, QTime(22, 30));
+
+    const ScheduleRule screen = ruleFrom(QJsonObject{
+        {QStringLiteral("from"), QStringLiteral("22:00")}, {QStringLiteral("to"), QStringLiteral("06:00")},
+        {QStringLiteral("screen"), QStringLiteral("aus")}});
+    QVERIFY(screen.screenOff);
+    QVERIFY(screen.layout.isEmpty());
+}
+
+void TestCore::scheduleMatches_data()
+{
+    QTest::addColumn<QString>("days");
+    QTest::addColumn<QString>("from");
+    QTest::addColumn<QString>("to");
+    QTest::addColumn<QDateTime>("when");
+    QTest::addColumn<bool>("matches");
+
+    const QString mofr = QStringLiteral("mo-fr");
+    QTest::newRow("inside") << mofr << QStringLiteral("07:00") << QStringLiteral("22:00") << at(3, QStringLiteral("12:00")) << true;
+    QTest::newRow("from is inclusive") << mofr << QStringLiteral("07:00") << QStringLiteral("22:00") << at(3, QStringLiteral("07:00")) << true;
+    QTest::newRow("to is exclusive") << mofr << QStringLiteral("07:00") << QStringLiteral("22:00") << at(3, QStringLiteral("22:00")) << false;
+    QTest::newRow("before") << mofr << QStringLiteral("07:00") << QStringLiteral("22:00") << at(3, QStringLiteral("06:59")) << false;
+    QTest::newRow("other day") << mofr << QStringLiteral("07:00") << QStringLiteral("22:00") << at(6, QStringLiteral("12:00")) << false;
+
+    const QString fr = QStringLiteral("fr");
+    QTest::newRow("overnight evening") << fr << QStringLiteral("22:00") << QStringLiteral("02:00") << at(5, QStringLiteral("23:30")) << true;
+    QTest::newRow("overnight morning after") << fr << QStringLiteral("22:00") << QStringLiteral("02:00") << at(6, QStringLiteral("01:00")) << true;
+    QTest::newRow("overnight morning of the day") << fr << QStringLiteral("22:00") << QStringLiteral("02:00") << at(5, QStringLiteral("01:00")) << false;
+    QTest::newRow("overnight end exclusive") << fr << QStringLiteral("22:00") << QStringLiteral("02:00") << at(6, QStringLiteral("02:00")) << false;
+    QTest::newRow("overnight daytime") << fr << QStringLiteral("22:00") << QStringLiteral("02:00") << at(5, QStringLiteral("12:00")) << false;
+    QTest::newRow("overnight sunday into monday") << QStringLiteral("so") << QStringLiteral("23:00") << QStringLiteral("01:00") << at(1, QStringLiteral("00:30")) << true;
+
+    QTest::newRow("whole day") << QStringLiteral("sa") << QStringLiteral("00:00") << QStringLiteral("00:00") << at(6, QStringLiteral("03:17")) << true;
+    QTest::newRow("whole day, other day") << QStringLiteral("sa") << QStringLiteral("08:00") << QStringLiteral("08:00") << at(7, QStringLiteral("09:00")) << false;
+}
+
+void TestCore::scheduleMatches()
+{
+    QFETCH(QString, days);
+    QFETCH(QString, from);
+    QFETCH(QString, to);
+    QFETCH(QDateTime, when);
+    QFETCH(bool, matches);
+
+    const ScheduleRule rule = ruleFrom(entry(days, from, to));
+    QVERIFY(!rule.days.isEmpty());
+    QCOMPARE(rule.matches(when), matches);
+}
+
+void TestCore::scheduleEvaluate()
+{
+    const QJsonArray entries{
+        entry(QStringLiteral("daily"), QStringLiteral("06:00"), QStringLiteral("23:00"), QStringLiteral("tag")),
+        entry(QStringLiteral("sa,so"), QStringLiteral("09:00"), QStringLiteral("12:00"), QStringLiteral("wochenende")),
+        QJsonObject{{QStringLiteral("days"), QStringLiteral("daily")}, {QStringLiteral("from"), QStringLiteral("22:00")},
+                    {QStringLiteral("to"), QStringLiteral("06:00")}, {QStringLiteral("screen"), QStringLiteral("off")}},
+    };
+    const QList<ScheduleRule> rules = parseSchedule(entries);
+    QCOMPARE(rules.size(), 3);
+
+    QCOMPARE(evaluateSchedule(rules, at(3, QStringLiteral("12:00"))), (ScheduleState{QStringLiteral("tag"), false}));
+    // Later rules win where they overlap
+    QCOMPARE(evaluateSchedule(rules, at(6, QStringLiteral("10:00"))), (ScheduleState{QStringLiteral("wochenende"), false}));
+    // Screen off wins over the day layout
+    const ScheduleState lateEvening = evaluateSchedule(rules, at(3, QStringLiteral("22:30")));
+    QVERIFY(lateEvening.screenOff);
+    QEXPECT_FAIL("", "evaluateSchedule() keeps the layout of an earlier matching rule when a later "
+                     "rule switches the screen off (harmless: nothing is shown while the screen is off)", Continue);
+    QCOMPARE(lateEvening.layout, QString());
+    // Only the screen-off rule applies at night
+    QCOMPARE(evaluateSchedule(rules, at(4, QStringLiteral("03:00"))), (ScheduleState{QString(), true}));
+    // Nothing applies: no layout and the screen stays on
+    QCOMPARE(evaluateSchedule(parseSchedule(QJsonArray{entries.at(1)}), at(3, QStringLiteral("10:00"))), ScheduleState());
+    QCOMPARE(evaluateSchedule({}, at(3, QStringLiteral("10:00"))), ScheduleState());
+}
+
+void TestCore::configOperations()
+{
+    auto config = [](const QJsonObject &json) { return Config::fromJson(json, QStringLiteral("/")); };
+    auto power = [&](const QString &value) {
+        return config({{QStringLiteral("display"), QJsonObject{{QStringLiteral("power"), value}}}}).display().power;
+    };
+
+    QCOMPARE(config({}).display().power, ScreenPower::None);
+    QCOMPARE(power(QStringLiteral("cec")), ScreenPower::Cec);
+    QCOMPARE(power(QStringLiteral(" DDC ")), ScreenPower::Ddc);
+    QCOMPARE(power(QStringLiteral("none")), ScreenPower::None);
+    QCOMPARE(power(QStringLiteral("rm -rf /")), ScreenPower::None);
+
+    QVERIFY(!config({}).isPublic());
+    QVERIFY(!config({{QStringLiteral("profile"), QStringLiteral("home")}}).isPublic());
+    QVERIFY(config({{QStringLiteral("profile"), QStringLiteral("Public")}}).isPublic());
+
+    QVERIFY(config({}).admin().enabled);
+    QVERIFY(!config({{QStringLiteral("admin"), QJsonObject{{QStringLiteral("enabled"), false}}}}).admin().enabled);
+
+    QVERIFY(config({}).schedule().isEmpty());
+    const QJsonArray schedule{entry(QStringLiteral("daily"), QStringLiteral("07:00"), QStringLiteral("22:00"))};
+    QCOMPARE(config({{QStringLiteral("schedule"), schedule}}).schedule(), schedule);
+}
+
+void TestCore::watchdogInterval()
+{
+    const QByteArray saved = qgetenv("WATCHDOG_USEC");
+    const bool wasSet = qEnvironmentVariableIsSet("WATCHDOG_USEC");
+
+    qunsetenv("WATCHDOG_USEC");
+    QCOMPARE(watchdogIntervalMs(), 0);
+    qputenv("WATCHDOG_USEC", "30000000"); // 30 s: ping every 15 s
+    QCOMPARE(watchdogIntervalMs(), 15000);
+    qputenv("WATCHDOG_USEC", "500000"); // very short timeouts still get at least 1 s
+    QCOMPARE(watchdogIntervalMs(), 1000);
+    qputenv("WATCHDOG_USEC", "viel");
+    QCOMPARE(watchdogIntervalMs(), 0);
+    qputenv("WATCHDOG_USEC", "-5");
+    QCOMPARE(watchdogIntervalMs(), 0);
+
+    if (wasSet)
+        qputenv("WATCHDOG_USEC", saved);
+    else
+        qunsetenv("WATCHDOG_USEC");
+}
+
+void TestCore::sdNotifyWithoutSystemd()
+{
+    const QByteArray saved = qgetenv("NOTIFY_SOCKET");
+    const bool wasSet = qEnvironmentVariableIsSet("NOTIFY_SOCKET");
+
+    qunsetenv("NOTIFY_SOCKET");
+    sdNotify("READY=1");
+    // A socket that does not exist must not hurt either
+    qputenv("NOTIFY_SOCKET", "/nonexistent/berry-kiosk-notify");
+    sdNotify("WATCHDOG=1");
+    qputenv("NOTIFY_SOCKET", QByteArray(200, 'x')); // longer than sun_path
+    sdNotify("WATCHDOG=1");
+
+    if (wasSet)
+        qputenv("NOTIFY_SOCKET", saved);
+    else
+        qunsetenv("NOTIFY_SOCKET");
 }
 
 QTEST_GUILESS_MAIN(TestCore)

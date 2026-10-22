@@ -7,6 +7,7 @@
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QProcess>
 #include <QScreen>
 #include <QSysInfo>
 
@@ -20,6 +21,11 @@ KioskController::KioskController(const Options &options, QObject *parent)
     connect(&m_reloadTimer, &QTimer::timeout, this, &KioskController::reloadConfig);
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, &m_reloadTimer, qOverload<>(&QTimer::start));
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, &m_reloadTimer, qOverload<>(&QTimer::start));
+
+    // The schedule works in minutes; a check every 15 s is precise enough
+    m_scheduleTimer.setInterval(15000);
+    connect(&m_scheduleTimer, &QTimer::timeout, this, &KioskController::evaluateSchedule);
+    m_scheduleTimer.start();
 
     m_previewTimer.setSingleShot(true);
     connect(&m_previewTimer, &QTimer::timeout, this, &KioskController::endPreview);
@@ -70,6 +76,57 @@ void KioskController::updateLayout()
     emit layoutChanged();
 }
 
+void KioskController::evaluateSchedule()
+{
+    const berry::ScheduleState state = berry::evaluateSchedule(m_schedule, QDateTime::currentDateTime());
+    if (state != m_scheduleState) {
+        m_scheduleState = state;
+        m_manualScreenOff.reset(); // a new schedule phase ends any manual switch
+        qInfo().noquote() << "Zeitplan:" << (state.screenOff ? QStringLiteral("Bildschirm aus")
+                                                             : QStringLiteral("Layout %1").arg(state.layout.isEmpty() ? QStringLiteral("(aktiv)") : state.layout));
+    }
+    setScheduledLayout(state.layout);
+    setScreenOff(m_manualScreenOff.value_or(state.screenOff));
+}
+
+void KioskController::setScreenOn(bool on)
+{
+    m_manualScreenOff = !on;
+    setScreenOff(!on);
+}
+
+void KioskController::setScreenOff(bool off)
+{
+    if (m_screenOff == off)
+        return;
+    m_screenOff = off;
+    qInfo() << (off ? "Bildschirm aus" : "Bildschirm an");
+    switchScreenPower(!off);
+    emit screenOffChanged();
+}
+
+// Fixed programs and arguments only, see berry::ScreenPower
+void KioskController::switchScreenPower(bool on)
+{
+    QString program;
+    QStringList arguments;
+    switch (m_config.display().power) {
+    case berry::ScreenPower::Cec:
+        program = QStringLiteral("cec-ctl");
+        arguments = {QStringLiteral("-d0"), QStringLiteral("--playback"), QStringLiteral("--to"), QStringLiteral("0"),
+                     on ? QStringLiteral("--image-view-on") : QStringLiteral("--standby")};
+        break;
+    case berry::ScreenPower::Ddc:
+        program = QStringLiteral("ddcutil");
+        arguments = {QStringLiteral("setvcp"), QStringLiteral("d6"), on ? QStringLiteral("01") : QStringLiteral("04")};
+        break;
+    case berry::ScreenPower::None:
+        return;
+    }
+    if (!QProcess::startDetached(program, arguments))
+        qWarning().noquote() << program << "nicht startbar – installiert? (cec-ctl: v4l-utils, ddcutil: ddcutil)";
+}
+
 void KioskController::setPaused(bool paused)
 {
     if (m_paused == paused)
@@ -108,7 +165,13 @@ void KioskController::reloadConfig()
         return;
     }
 
+    QStringList scheduleErrors;
+    m_schedule = berry::parseSchedule(m_config.schedule(), &scheduleErrors);
+    for (const QString &error : std::as_const(scheduleErrors))
+        qWarning().noquote() << error;
+
     emit configChanged();
+    evaluateSchedule(); // also picks the layout
     updateLayout();
     updateRender();
     writeDisplayState(); // the state directory may have moved
@@ -153,6 +216,7 @@ void KioskController::writeDisplayState()
         {QStringLiteral("renderSize"), QJsonArray{m_render.renderSize.width(), m_render.renderSize.height()}},
         {QStringLiteral("screenSize"), QJsonArray{m_screenSize.width(), m_screenSize.height()}},
         {QStringLiteral("rotation"), rotation()},
+        {QStringLiteral("screenOff"), m_screenOff},
         {QStringLiteral("maxTextureSize"), m_options.maxTextureSize},
         {QStringLiteral("device"), deviceModel()},
         {QStringLiteral("version"), QCoreApplication::applicationVersion()},

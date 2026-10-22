@@ -1,0 +1,50 @@
+[Unit]
+Description=berry-kiosk Mediathek, Bildvarianten und Verwaltung
+Documentation=https://github.com/herrlolstick/berry-kiosk
+After=network-online.target local-fs.target remote-fs.target
+Wants=network-online.target
+
+[Service]
+# Ready once the web API listens; a hung main thread stops the watchdog pings
+Type=notify
+NotifyAccess=main
+WatchdogSec=60
+User=berry-kiosk
+Group=berry-kiosk
+StateDirectory=berry-kiosk
+StateDirectoryMode=0750
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/berry-kiosk-admin --config /var/lib/berry-kiosk/config.json
+Restart=on-failure
+RestartSec=5
+
+# Rendering pictures must never make the slideshow stutter
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+
+# Hardening. The admin service only needs its data directory (and the media
+# folder, which may live elsewhere, e.g. on a NAS mount: /etc and /usr stay
+# read-only, the rest of the file system keeps normal permissions).
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

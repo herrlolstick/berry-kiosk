@@ -208,6 +208,8 @@ private slots:
     void config();
     void displayOffline();
     void previewLayout();
+    void screenSwitch();
+    void publicProfileLogin();
     void mediaFilters();
     void albumCovers();
     void batch();
@@ -632,6 +634,34 @@ void TestApi::previewLayout()
 
     QCOMPARE(env->request("DELETE", QStringLiteral("/api/display/preview"), {}, {}, false).status, 403);
     QCOMPARE(env->request("DELETE", QStringLiteral("/api/display/preview")).status, 503);
+}
+
+void TestApi::screenSwitch()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    const QByteArray on = R"({"on": true})";
+
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/screen"), on).status, 401);
+    QVERIFY(env->login());
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/screen"), on, {}, false).status, 403);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/screen"), QByteArray("{}")).status, 400);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/screen"), QByteArray(R"({"on": "ja"})")).status, 400);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/display/screen"), QByteArray("{kaputt")).status, 400);
+
+    // Valid, but no display connected
+    const Response offline = env->request("POST", QStringLiteral("/api/display/screen"), QByteArray(R"({"on": false})"));
+    QCOMPARE(offline.status, 503);
+    QVERIFY(!offline.object().value(u"error").toString().isEmpty());
+}
+
+void TestApi::publicProfileLogin()
+{
+    // The public profile only shortens sessions; logging in still works
+    const auto env = makeEnv(QJsonObject{{QStringLiteral("profile"), QStringLiteral("public")}});
+    QVERIFY(env);
+    QVERIFY(env->login());
+    QCOMPARE(env->get(QStringLiteral("/api/status")).status, 200);
 }
 
 void TestApi::mediaFilters()

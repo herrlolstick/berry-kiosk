@@ -6,12 +6,14 @@
 #include "displayprotocol.h"
 #include "imagemetadata.h"
 #include "libraryworker.h"
+#include "sdnotify.h"
 
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QTextStream>
 #include <QThread>
+#include <QTimer>
 
 #include <cstdio>
 #include <memory>
@@ -129,7 +131,11 @@ int main(int argc, char *argv[])
         followDisplay();
         QObject::connect(watcher.get(), &ChangeWatcher::changed, display.get(), followDisplay);
 
-        const berry::AdminSettings settings = berry::Config::load(configPath).admin();
+        const berry::Config config = berry::Config::load(configPath);
+        const berry::AdminSettings settings = config.admin();
+        if (!settings.enabled) {
+            qInfo() << "Web-API abgeschaltet (admin.enabled = false)";
+        } else {
         api = std::make_unique<ApiServer>(configPath, display.get());
         QObject::connect(api.get(), &ApiServer::syncRequested, worker, &LibraryWorker::requestSync);
         QString error;
@@ -141,8 +147,22 @@ int main(int argc, char *argv[])
             return 1;
         }
         qInfo().noquote() << QStringLiteral("Verwaltung: http://%1:%2/").arg(settings.address).arg(api->serverPort());
-        if (!loadCredentials(credentialsPath(berry::Config::load(configPath).library().stateDir)).isValid())
+        if (!loadCredentials(credentialsPath(config.library().stateDir)).isValid())
             qWarning().noquote() << "Noch kein Passwort gesetzt: berry-kiosk-admin --config" << configPath << "--set-password";
+        if (config.isPublic() && (settings.address == u"0.0.0.0" || settings.address == u"::"))
+            qWarning() << "Profil public: die Verwaltung ist im ganzen Netz erreichbar – admin.address auf 127.0.0.1 setzen oder admin.enabled = false erwägen";
+        }
+    }
+
+    // systemd (Type=notify): ready once listening, then pings from the main
+    // thread, so a hung web server gets restarted
+    QTimer watchdog;
+    if (!once) {
+        berry::sdNotify("READY=1");
+        if (const int interval = berry::watchdogIntervalMs()) {
+            QObject::connect(&watchdog, &QTimer::timeout, [] { berry::sdNotify("WATCHDOG=1"); });
+            watchdog.start(interval);
+        }
     }
 
     thread.start();

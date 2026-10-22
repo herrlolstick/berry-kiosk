@@ -4,6 +4,7 @@
 #include "imagemetadata.h"
 #include "kioskcontroller.h"
 #include "mediaimageprovider.h"
+#include "sdnotify.h"
 
 #include <QCommandLineParser>
 #include <QCursor>
@@ -20,6 +21,8 @@
 #include <QQmlApplicationEngine>
 #include <QQuickWindow>
 #include <QTimer>
+
+#include <memory>
 
 namespace {
 
@@ -105,8 +108,13 @@ int main(int argc, char *argv[])
 
     const bool eglfs = usesEglfs(argc, argv);
     const berry::DeviceInfo device = berry::DeviceInfo::detect();
-    if (eglfs)
-        prepareKmsConfig(berry::Config::load(configPath), device);
+    const berry::Config startConfig = berry::Config::load(configPath);
+    if (eglfs) {
+        prepareKmsConfig(startConfig, device);
+        // Public kiosk: keyboards, mice and touch screens are simply ignored
+        if (startConfig.isPublic())
+            qputenv("QT_QPA_EGLFS_DISABLE_INPUT", "1");
+    }
 
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("berry-kiosk-display"));
@@ -140,6 +148,7 @@ int main(int argc, char *argv[])
         options.maxTextureSize = 2048;
     options.debug = parser.isSet(debugOption);
     options.restartOnModeChange = eglfs;
+    options.publicMode = startConfig.isPublic();
 
     qInfo().noquote() << "berry-kiosk" << BERRY_KIOSK_VERSION << "| Konfiguration:" << configPath
                       << "| Gerät:" << (device.model.isEmpty() ? QStringLiteral("unbekannt") : device.model)
@@ -164,9 +173,24 @@ int main(int argc, char *argv[])
     engine.loadFromModule("BerryKiosk", "Main");
 
     DisplayControl control(&controller);
-    if (!engine.rootObjects().isEmpty())
-        control.setWindow(qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst()));
+    auto *window = engine.rootObjects().isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst());
+    control.setWindow(window);
     control.start();
+
+    // systemd (Type=notify): ready once the first frame is on screen, then
+    // regular pings from the GUI thread, so a hung UI gets restarted
+    if (window) {
+        auto ready = std::make_shared<QMetaObject::Connection>();
+        *ready = QObject::connect(window, &QQuickWindow::frameSwapped, &app, [ready] {
+            berry::sdNotify("READY=1");
+            QObject::disconnect(*ready);
+        }, Qt::QueuedConnection);
+    }
+    QTimer watchdog;
+    if (const int interval = berry::watchdogIntervalMs()) {
+        QObject::connect(&watchdog, &QTimer::timeout, [] { berry::sdNotify("WATCHDOG=1"); });
+        watchdog.start(interval);
+    }
 
     if (parser.isSet(snapshotOption)) {
         const QString file = parser.value(snapshotOption);

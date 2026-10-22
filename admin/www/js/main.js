@@ -15,6 +15,7 @@ const routes = {
   hochladen: { label: 'Hochladen', load: () => import('./view-upload.js') },
   alben: { label: 'Alben', load: () => import('./view-albums.js') },
   layouts: { label: 'Layouts', load: () => import('./view-layouts.js') },
+  zeitplan: { label: 'Zeitplan', load: () => import('./view-schedule.js') },
   einstellungen: { label: 'Einstellungen', load: () => import('./view-settings.js') },
 };
 

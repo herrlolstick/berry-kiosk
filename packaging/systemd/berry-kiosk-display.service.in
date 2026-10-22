@@ -1,0 +1,55 @@
+[Unit]
+Description=berry-kiosk Anzeige
+Documentation=https://github.com/herrlolstick/berry-kiosk
+After=systemd-user-sessions.service plymouth-quit-wait.service
+# The display owns the screen; tty1's login prompt would fight over it
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+# Ready once the first frame is on screen; a hung UI stops the watchdog
+# pings and gets restarted
+Type=notify
+NotifyAccess=main
+WatchdogSec=30
+User=berry-kiosk
+Group=berry-kiosk
+SupplementaryGroups=video render input
+StateDirectory=berry-kiosk
+StateDirectoryMode=0750
+RuntimeDirectory=berry-kiosk
+
+Environment=QT_QPA_PLATFORM=eglfs
+Environment=QT_QPA_EGLFS_INTEGRATION=eglfs_kms
+Environment=QT_QPA_EGLFS_HIDECURSOR=1
+Environment=QSG_RHI_BACKEND=opengl
+Environment=XDG_RUNTIME_DIR=/run/berry-kiosk
+
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/berry-kiosk-display --config /var/lib/berry-kiosk/config.json
+# Also used on purpose: the display exits when the screen mode has to change
+Restart=always
+RestartSec=2
+
+# Hardening. The display needs the GPU, input devices and (for CEC/DDC) a
+# few device nodes, so devices stay visible; everything else is locked down.
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

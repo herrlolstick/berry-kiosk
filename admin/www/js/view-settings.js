@@ -31,6 +31,17 @@ function choiceToRenditions(choice) {
   return { auto: 'auto', '1080p': ['1080p'], '2160p': ['2160p'], both: ['1080p', '2160p'] }[choice];
 }
 
+const POWER = [
+  ['none', 'Nur schwarzes Bild'],
+  ['cec', 'HDMI-CEC – Fernseher (benötigt v4l-utils)'],
+  ['ddc', 'DDC/CI – Monitore (benötigt ddcutil und I²C-Zugriff)'],
+];
+
+const PROFILES = [
+  ['home', 'Zuhause'],
+  ['public', 'Öffentlicher Raum'],
+];
+
 function select(name, options, value) {
   return el('select', { name }, options.map(([optionValue, label]) =>
     el('option', { value: String(optionValue), textContent: label, selected: String(optionValue) === String(value) })));
@@ -142,9 +153,19 @@ function displaySection(config) {
       'Beim Speichern startet die Anzeige kurz neu, um den Bildschirmmodus zu wechseln.'),
     field('Drehung', select('rotation', [[0, '0°'], [90, '90°'], [180, '180°'], [270, '270°']], display.rotation || 0),
       'Für hochkant oder kopfüber montierte Bildschirme'),
+    field('Bildschirm abschalten über', select('power', POWER, ['cec', 'ddc'].includes(display.power) ? display.power : 'none'),
+      'Wie der Zeitplan den Bildschirm ausschaltet. „Nur schwarzes Bild“ funktioniert immer.'),
+    field('Profil', select('profile', PROFILES, config.profile === 'public' ? 'public' : 'home'),
+      'Öffentlicher Raum: keine Eingabegeräte, kürzere Anmeldung. Wirkt nach einem Neustart der Dienste.'),
   ], (form) => updateConfig((current) => {
     current.locale = form.locale.value;
-    current.display = { ...(current.display || {}), maxRender: form.maxRender.value, rotation: Number(form.rotation.value) };
+    current.profile = form.profile.value;
+    current.display = {
+      ...(current.display || {}),
+      maxRender: form.maxRender.value,
+      rotation: Number(form.rotation.value),
+      power: form.power.value,
+    };
   }));
   return section('Anzeige', null, form);
 }
@@ -181,6 +202,9 @@ function adminSection(config) {
     el('div', { className: 'form-grid two' }, [
       readOnly('Adresse', admin.address || '0.0.0.0'),
       readOnly('Port', admin.port || 8080),
+      el('p', { className: 'muted small full set-hint', textContent:
+        'Mit "enabled": false im Abschnitt "admin" lässt sich die Web-Verwaltung ganz abschalten – etwa für einen öffentlichen Kiosk, '
+        + 'dessen Bilder per Dateifreigabe kommen. Die Mediathek wird trotzdem weiter gepflegt.' }),
     ]));
 }
 

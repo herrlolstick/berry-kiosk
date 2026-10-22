@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi
+
+# Pictures, library and configuration are never deleted by the package, not
+# even on purge: they are the user's data.
+if [ "$1" = "purge" ]; then
+    echo "berry-kiosk: /var/lib/berry-kiosk (Bilder, Mediathek, Einstellungen) bleibt erhalten."
+fi
+
+exit 0

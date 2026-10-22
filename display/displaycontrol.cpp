@@ -89,6 +89,7 @@ QCborMap DisplayControl::handle(const QCborMap &request)
             {QStringLiteral("paused"), m_kiosk->paused()},
             {QStringLiteral("layout"), m_kiosk->layoutId()},
             {QStringLiteral("previewing"), m_kiosk->previewing()},
+            {QStringLiteral("screenOff"), m_kiosk->screenOff()},
             {QStringLiteral("renderTier"), m_kiosk->renderTier()},
             {QStringLiteral("shown"), shown},
         };
@@ -108,6 +109,10 @@ QCborMap DisplayControl::handle(const QCborMap &request)
         if (layout.isEmpty())
             return {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("kein Layout")}};
         m_kiosk->previewLayout(layout.toVariantMap(), int(request.value(QStringLiteral("seconds")).toInteger(60)));
+        return ok;
+    }
+    if (command == u"screen") {
+        m_kiosk->setScreenOn(request.value(QStringLiteral("on")).toBool());
         return ok;
     }
     if (command == u"endPreview") {
