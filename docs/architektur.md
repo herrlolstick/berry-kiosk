@@ -11,7 +11,7 @@
 │     └─ lauscht auf lokalem Socket ◄──────────────┐                    │
 │                                                  │ "config geändert", │
 │  berry-kiosk-admin  (C++ / Qt HttpServer)        │ "neue Bilder",     │
-│     ├─ REST-API + WebSocket                      │ "Screenshot!"      │
+│     ├─ REST-API                                  │ "Screenshot!"      │
 │     ├─ liefert die Verwaltungswebsite aus ───────┘                    │
 │     ├─ Upload, EXIF/XMP, Skalierung, Thumbnails                       │
 │     └─ Login / Sessions                                               │
@@ -26,21 +26,29 @@
 Zwei getrennte Prozesse: Stürzt die Verwaltung ab oder verarbeitet sie gerade viele
 Uploads, läuft die Diashow ungestört weiter. Beide teilen sich `libberrycore`.
 
-Stand Meilenstein 4: In `berry-kiosk-admin` läuft die Web-API (`QHttpServer`,
+Stand Meilenstein 5: In `berry-kiosk-admin` läuft die Web-API (`QHttpServer`,
 `admin/apiserver.*`) im Hauptthread, Abgleich und Varianten (`core/library.*`,
 `core/renditions.*`) in einem eigenen Thread, Bild für Bild, damit neue
 Abgleich-Anfragen dazwischenkommen. Die API liest die Mediathek nur lesend; ihre
-Änderungen landen im Bilderordner (Uploads, Sidecar-JSON, Papierkorb) und in
-`config.json`, der Worker übernimmt sie beim nächsten Abgleich. Anmeldung: ein Konto
-mit PBKDF2-Hash in `state/auth.json`, Sitzungen im Speicher, CSRF-Schutz über
-SameSite-Cookie und Pflicht-Header. Zur Anzeige führt ein lokaler Socket
-(`state/display.sock`, nur gleicher Benutzer) mit CBOR-Nachrichten
+Änderungen landen im Bilderordner (Uploads, Sidecar-JSON, Verschieben, Papierkorb) und
+in `config.json`, der Worker übernimmt sie beim nächsten Abgleich. Der Abgleich erkennt
+verschobene Dateien (gleicher Name, gleiche Größe und Änderungszeit an neuem Ort): Sie
+behalten ID und Varianten, Verschieben zwischen Alben rechnet also nichts neu.
+Anmeldung: ein Konto mit PBKDF2-Hash in `state/auth.json`, Sitzungen im Speicher,
+CSRF-Schutz über SameSite-Cookie und Pflicht-Header. Zur Anzeige führt ein lokaler
+Socket (`state/display.sock`, nur gleicher Benutzer) mit CBOR-Nachrichten
 (`core/displayprotocol.*`): nächstes Bild, Pause, Bildschirmfoto, Status und das
 Ereignis „Bild gezeigt“. Daneben bleiben die JSON-Dateien in `state/`
 (`display.json` mit der Render-Stufe, `library.json` mit einem Generationszähler).
 Die Anzeige liest die Mediathek nur lesend (SQLite im WAL-Modus) und fällt auf den
 Ordner zurück, solange es keine gibt. Widgets folgen einer Diashow-Region über deren
 `shown`-Signal; `LayoutView` merkt sich das aktuelle Bild je Region.
+
+Die Web-Oberfläche (`admin/www/`) ist reines JavaScript mit ES-Modulen und CSS, ohne
+Build-Schritt und ohne npm-Abhängigkeiten, als Qt-Ressourcen in den Admin-Dienst
+einkompiliert: `js/main.js` (Gerüst und Hash-Router), `js/api.js` (API-Client),
+`js/ui.js` (Helfer), je Ansicht ein `js/view-*.js` und eine CSS-Datei neben
+`css/base.css` mit den Design-Tokens. Strenge CSP ohne Inline-Skripte und -Styles.
 
 ## Anzeige
 
@@ -69,14 +77,23 @@ KMS-Modus auf 1920×1080, damit ein 4K-Fernseher nicht mit einem Modus betrieben
 den die GPU nicht füllen kann. Ändert sich `maxRender` unter eglfs, beendet sich die
 Anzeige und systemd startet sie im neuen Modus neu.
 
-## Geplante Verwaltungswebsite
+## Verwaltungswebsite
 
-Svelte-SPA mit gridstack.js, ausgeliefert vom Admin-Server (kein Node.js auf dem Pi):
+Gebaut (Meilenstein 5) als ES-Module ohne Build-Schritt statt der ursprünglich
+geplanten Svelte-SPA: Der Pi baut sie ohne Node.js, und es gibt keine
+npm-Abhängigkeiten. Ausgeliefert vom Admin-Server:
 
-- **Dashboard** – Live-Screenshot des Kiosks, Status, nächstes Bild/Pause
-- **Raster-Editor** – Regionen per Drag & Drop, Eigenschaften pro Region,
-  „Auf Kiosk vorschauen“ und „Aktivieren“
+- **Übersicht** – Live-Screenshot des Kiosks, Status, nächstes Bild/Pause, Mediathek und Speicher
+- **Mediathek** – Raster mit Filtern und Suche, Mehrfachauswahl (zeigen, ausblenden,
+  verschieben, löschen), Detailansicht mit EXIF und Bearbeiten von Titel/Ort/Zitat
+- **Hochladen** – Drag & Drop auch ganzer Ordner, Warteschlange mit Fortschritt
+- **Alben** – Baum mit Covern, anlegen, umbenennen/verschieben, löschen (Papierkorb)
+- **Einstellungen** – Passwort, Sprache, Auflösung, Drehung, Varianten, Upload-Größe
+
+Noch offen:
+
+- **Raster-Editor** (Meilenstein 6) – Regionen per Drag & Drop, Eigenschaften pro
+  Region, „Auf Kiosk vorschauen“ und „Aktivieren“
 - **Animationen** – Übergänge global und pro Region
-- **Mediathek** – Upload per Drag & Drop, Alben, Titel/Zitat pro Bild, EXIF-Anzeige
 - **Zeitplan** – Layout je Uhrzeit, Bildschirm aus
-- **Einstellungen** – Profil `home`/`public`, Passwort, Auflösung, Drehung
+- **Profil** `home`/`public`

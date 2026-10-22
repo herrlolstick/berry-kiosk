@@ -1,0 +1,81 @@
+/* Upload view (view-upload.js) */
+
+.up-drop {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 40px 16px;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.up-drop:hover, .up-drop:focus-visible { border-color: var(--accent); }
+
+/* While files are dragged over the page, the whole page is a drop target */
+.up-dragging .up-drop {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.up-dragging::after {
+  content: "Loslassen zum Hochladen";
+  position: fixed;
+  inset: var(--topbar-height) 0 0 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  border: 3px dashed var(--accent);
+  background: rgb(0 0 0 / 35%);
+  color: #fff;
+  font-size: 1.3rem;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.up-skipped { margin: 0; }
+
+.up-queue h2 { margin: 0; }
+.up-summary { margin: 8px 0 12px; font-weight: 600; }
+
+.up-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.up-item {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+}
+.up-item[data-status="done"] .progress > span { background: var(--accent); }
+.up-item[data-status="error"] { border-color: var(--danger); }
+.up-item[data-status="error"] .progress > span { background: var(--danger); }
+.up-item[data-status="cancelled"] { opacity: .55; }
+
+.up-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+.up-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.up-done {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}

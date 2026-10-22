@@ -1,0 +1,26 @@
+/* Einstellungen (view-settings.js) */
+
+.set-grid {
+  display: grid;
+  gap: var(--gap);
+  max-width: 880px;
+}
+
+.set-section { display: grid; gap: 12px; }
+.set-section h2 { margin: 0; }
+.set-section > p { margin: 0; }
+
+.set-form { display: grid; gap: 12px; }
+.set-form .error { margin: 0; }
+
+.set-dirty {
+  color: var(--warning);
+  font-size: .85rem;
+}
+
+.set-section input[readonly] {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.set-about p { margin: 0; }

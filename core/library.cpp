@@ -201,6 +201,25 @@ SyncResult Library::sync()
 
     const QDir root(m_mediaRoot);
     int uncommitted = 0;
+    // Commit in batches so a long first sync shows up bit by bit
+    const auto wrote = [&] {
+        if (++uncommitted >= kCommitEvery) {
+            db.commit();
+            db.transaction();
+            uncommitted = 0;
+        }
+    };
+
+    struct Fresh
+    {
+        QString file;
+        QString relative;
+        qint64 size;
+        qint64 modified;
+        qint64 sidecarModified;
+    };
+    QList<Fresh> fresh;
+
     db.transaction();
     for (const QString &file : scanImages(m_mediaRoot)) {
         const QString relative = root.relativeFilePath(file);
@@ -211,29 +230,49 @@ SyncResult Library::sync()
 
         const auto it = known.constFind(relative);
         if (it == known.cend()) {
-            writeImage(0, file, relative, size, modified, sidecarModified);
-            ++result.added;
+            fresh.append({file, relative, size, modified, sidecarModified});
+            continue;
+        }
+        const Known image = *it;
+        known.erase(it);
+        if (image.size != size || image.modified != modified) {
+            removeRenditions(image.id); // new pixels, new renditions
+            writeImage(image.id, file, relative, size, modified, sidecarModified);
+            ++result.updated;
+        } else if (image.sidecarModified != sidecarModified) {
+            writeImage(image.id, file, relative, size, modified, sidecarModified);
+            ++result.updated;
         } else {
-            const Known image = *it;
-            known.erase(it);
-            if (image.size != size || image.modified != modified) {
-                removeRenditions(image.id); // new pixels, new renditions
-                writeImage(image.id, file, relative, size, modified, sidecarModified);
-                ++result.updated;
-            } else if (image.sidecarModified != sidecarModified) {
-                writeImage(image.id, file, relative, size, modified, sidecarModified);
-                ++result.updated;
-            } else {
-                ++result.unchanged;
-                continue;
-            }
+            ++result.unchanged;
+            continue;
         }
-        // Commit in batches so a long first sync shows up bit by bit
-        if (++uncommitted >= kCommitEvery) {
-            db.commit();
-            db.transaction();
-            uncommitted = 0;
+        wrote();
+    }
+
+    // A file that vanished in one place and turned up in another with the same
+    // name, size and modification time was moved (Finder, rsync, the web UI):
+    // it keeps its id and, above all, its renditions.
+    const auto moveKey = [](const QString &path, qint64 size, qint64 modified) {
+        return QStringLiteral("%1|%2|%3").arg(QFileInfo(path).fileName()).arg(size).arg(modified);
+    };
+    QHash<QString, QString> vanished; // move key -> old relative path
+    for (auto it = known.cbegin(); it != known.cend(); ++it)
+        vanished.insert(moveKey(it.key(), it->size, it->modified), it.key());
+
+    for (const Fresh &image : std::as_const(fresh)) {
+        const QString key = moveKey(image.relative, image.size, image.modified);
+        const auto from = vanished.constFind(key);
+        if (from != vanished.cend() && known.contains(*from)) {
+            writeImage(known.value(*from).id, image.file, image.relative, image.size, image.modified,
+                       image.sidecarModified);
+            known.remove(*from);
+            vanished.erase(from);
+            ++result.moved;
+        } else {
+            writeImage(0, image.file, image.relative, image.size, image.modified, image.sidecarModified);
+            ++result.added;
         }
+        wrote();
     }
 
     QSqlQuery remove(db);
@@ -427,6 +466,12 @@ private:
     bool m_exists = false;
 };
 
+// For LIKE ... ESCAPE '\': the search text is matched literally
+QString escapeLike(QString text)
+{
+    return text.replace(u'\\', QStringLiteral("\\\\")).replace(u'%', QStringLiteral("\\%")).replace(u'_', QStringLiteral("\\_"));
+}
+
 struct AlbumFilter
 {
     QString album;      // '' = everything
@@ -439,9 +484,7 @@ AlbumFilter albumFilter(const QString &album)
     if (clean == u"." || clean == u"/")
         clean.clear();
     clean = notNull(clean);
-    QString prefix = clean;
-    prefix.replace(u'\\', QStringLiteral("\\\\")).replace(u'%', QStringLiteral("\\%")).replace(u'_', QStringLiteral("\\_"));
-    return {clean, prefix + QStringLiteral("/%")};
+    return {clean, escapeLike(clean) + QStringLiteral("/%")};
 }
 
 constexpr auto kAlbumCondition = "(? = '' OR album = ? OR album LIKE ? ESCAPE '\\')";
@@ -456,7 +499,8 @@ void bindAlbum(QSqlQuery &query, const AlbumFilter &filter)
 constexpr auto kMediaColumns =
     "id, path, album, width, height, title, description, location, camera, lens, taken, aperture, "
     "exposure_time, focal_length, iso, quote, quote_author, enabled, added_at, "
-    "(SELECT group_concat(kind) FROM renditions r WHERE r.image_id = images.id AND r.path <> '')";
+    "(SELECT group_concat(kind) FROM renditions r WHERE r.image_id = images.id AND r.path <> ''), "
+    "file_size, file_mtime";
 
 QJsonObject mediaFromQuery(const QSqlQuery &query)
 {
@@ -470,6 +514,9 @@ QJsonObject mediaFromQuery(const QSqlQuery &query)
         {QStringLiteral("addedAt"), query.value(18).toString()},
         {QStringLiteral("renditions"),
          QJsonArray::fromStringList(query.value(19).toString().split(u',', Qt::SkipEmptyParts))},
+        {QStringLiteral("fileSize"), query.value(20).toLongLong()},
+        // Changes whenever the file does; clients put it into image URLs to bypass caches
+        {QStringLiteral("version"), query.value(21).toLongLong()},
     };
     const auto text = [&](int column, const char *key) {
         if (!query.isNull(column))
@@ -536,10 +583,31 @@ QJsonObject queryMedia(const QString &databasePath, const MediaQuery &request, Q
     if (!db.open(error))
         return {};
 
+    // The same WHERE clause for the count and for the page
     const AlbumFilter filter = albumFilter(request.album);
+    QStringList conditions{QLatin1String(kAlbumCondition)};
+    QVariantList values{filter.album, filter.album, filter.likePrefix};
+    if (request.enabled.has_value()) {
+        conditions.append(QStringLiteral("enabled = ?"));
+        values.append(*request.enabled ? 1 : 0);
+    }
+    const QString search = request.search.trimmed();
+    if (!search.isEmpty()) {
+        // SQLite's LIKE ignores case for ASCII letters only: "a" finds "A", but "ä" not "Ä"
+        conditions.append(QStringLiteral("(title LIKE ? ESCAPE '\\' OR location LIKE ? ESCAPE '\\' "
+                                         "OR description LIKE ? ESCAPE '\\' OR path LIKE ? ESCAPE '\\')"));
+        const QString pattern = u'%' + escapeLike(search) + u'%';
+        values << pattern << pattern << pattern << pattern;
+    }
+    const QString where = conditions.join(QStringLiteral(" AND "));
+    const auto bindAll = [&values](QSqlQuery &query) {
+        for (const QVariant &value : values)
+            query.addBindValue(value);
+    };
+
     QSqlQuery query(db.database());
-    query.prepare(QStringLiteral("SELECT COUNT(*) FROM images WHERE %1").arg(QLatin1String(kAlbumCondition)));
-    bindAlbum(query, filter);
+    query.prepare(QStringLiteral("SELECT COUNT(*) FROM images WHERE %1").arg(where));
+    bindAll(query);
     if (!query.exec() || !query.next()) {
         if (error)
             *error = query.lastError().text();
@@ -547,9 +615,18 @@ QJsonObject queryMedia(const QString &databasePath, const MediaQuery &request, Q
     }
     const int total = query.value(0).toInt();
 
-    query.prepare(QStringLiteral("SELECT %1 FROM images WHERE %2 ORDER BY added_at DESC, id DESC LIMIT ? OFFSET ?")
-                      .arg(QLatin1String(kMediaColumns), QLatin1String(kAlbumCondition)));
-    bindAlbum(query, filter);
+    const QString direction = request.ascending ? QStringLiteral("ASC") : QStringLiteral("DESC");
+    QString order;
+    if (request.sort == u"taken")
+        order = QStringLiteral("taken IS NULL, taken %1, id %1").arg(direction); // undated pictures last
+    else if (request.sort == u"name")
+        order = QStringLiteral("path COLLATE NOCASE %1, id %1").arg(direction);
+    else
+        order = QStringLiteral("added_at %1, id %1").arg(direction);
+
+    query.prepare(QStringLiteral("SELECT %1 FROM images WHERE %2 ORDER BY %3 LIMIT ? OFFSET ?")
+                      .arg(QLatin1String(kMediaColumns), where, order));
+    bindAll(query);
     query.addBindValue(qBound(1, request.limit, 500));
     query.addBindValue(qMax(0, request.offset));
     if (!query.exec()) {
@@ -596,8 +673,11 @@ QJsonArray albumCounts(const QString &databasePath, QString *error)
     if (!db.open(error))
         return {};
     QSqlQuery query(db.database());
+    // The newest picture of each album serves as its cover
     if (!query.exec(QStringLiteral(
-            "SELECT album, COUNT(*), SUM(enabled) FROM images GROUP BY album ORDER BY album COLLATE NOCASE"))) {
+            "SELECT a.album, a.count, a.enabled, i.id, i.file_mtime FROM "
+            "(SELECT album, COUNT(*) AS count, SUM(enabled) AS enabled, MAX(id) AS newest FROM images GROUP BY album) a "
+            "JOIN images i ON i.id = a.newest ORDER BY a.album COLLATE NOCASE"))) {
         if (error)
             *error = query.lastError().text();
         return {};
@@ -608,6 +688,8 @@ QJsonArray albumCounts(const QString &databasePath, QString *error)
             {QStringLiteral("name"), query.value(0).toString()},
             {QStringLiteral("count"), query.value(1).toInt()},
             {QStringLiteral("enabled"), query.value(2).toInt()},
+            {QStringLiteral("cover"), QJsonObject{{QStringLiteral("id"), query.value(3).toLongLong()},
+                                                  {QStringLiteral("version"), query.value(4).toLongLong()}}},
         });
     }
     return albums;

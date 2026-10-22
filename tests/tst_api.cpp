@@ -8,6 +8,7 @@
 #include <QBuffer>
 #include <QDir>
 #include <QDirIterator>
+#include <QDateTime>
 #include <QFile>
 #include <QImage>
 #include <QJsonArray>
@@ -21,6 +22,8 @@
 #include <QTest>
 
 #include <memory>
+
+#include <exiv2/exiv2.hpp>
 
 using namespace berry;
 
@@ -158,6 +161,23 @@ QStringList filesBelow(const QString &directory)
     return files;
 }
 
+// Sets the EXIF capture date of a picture in the media folder
+void setTaken(const QString &path, const char *date)
+{
+    auto image = Exiv2::ImageFactory::open(QFile::encodeName(path).toStdString());
+    image->readMetadata();
+    image->exifData()["Exif.Photo.DateTimeOriginal"] = std::string(date);
+    image->writeMetadata();
+}
+
+QStringList pathsOf(const QJsonArray &items)
+{
+    QStringList paths;
+    for (const QJsonValue &item : items)
+        paths.append(item.toObject().value(u"path").toString());
+    return paths;
+}
+
 qint64 idOf(const QJsonArray &items, const QString &path)
 {
     for (const QJsonValue &item : items) {
@@ -187,6 +207,13 @@ private slots:
     void albums();
     void config();
     void displayOffline();
+    void mediaFilters();
+    void albumCovers();
+    void batch();
+    void batchErrors();
+    void renameAlbum();
+    void deleteAlbum();
+    void changePassword();
 };
 
 void TestApi::initTestCase()
@@ -209,9 +236,19 @@ void TestApi::staticFiles()
     QCOMPARE(index.header("X-Frame-Options"), QByteArray("DENY"));
     QCOMPARE(index.header("X-Content-Type-Options"), QByteArray("nosniff"));
 
-    const Response script = env->get(QStringLiteral("/app.js"));
+    const Response script = env->get(QStringLiteral("/js/main.js"));
     QCOMPARE(script.status, 200);
     QVERIFY(script.header("Content-Type").startsWith("text/javascript"));
+    QVERIFY(env->get(QStringLiteral("/css/base.css")).header("Content-Type").startsWith("text/css"));
+    const Response icon = env->get(QStringLiteral("/assets/icon.svg"));
+    QCOMPARE(icon.status, 200);
+    QCOMPARE(icon.header("Content-Type"), QByteArray("image/svg+xml"));
+
+    // Only plain file names inside the bundled folders
+    QCOMPARE(env->get(QStringLiteral("/js/..%2Fsecret")).status, 404);
+    QCOMPARE(env->get(QStringLiteral("/js/.hidden.js")).status, 404);
+    QCOMPARE(env->get(QStringLiteral("/js/gibt-es-nicht.js")).status, 404);
+    QCOMPARE(env->get(QStringLiteral("/app.js")).status, 404); // the milestone 4 console is gone
 }
 
 void TestApi::authFlow()
@@ -556,6 +593,339 @@ void TestApi::displayOffline()
     QCOMPARE(status.object().value(u"display").toObject().value(u"connected").toBool(true), false);
     QVERIFY(status.object().value(u"storage").toObject().value(u"total").toDouble() > 0);
     QVERIFY(!status.object().value(u"version").toString().isEmpty());
+}
+
+void TestApi::mediaFilters()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    QVERIFY(env->login());
+
+    for (const char *name : {"anna.jpg", "berta.jpg", "carla.jpg", "dora.jpg"})
+        QCOMPARE(env->request("POST", QStringLiteral("/api/media?album=wald&name=%1").arg(QLatin1String(name)), jpegBytes()).status, 201);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?name=Fuchs.jpg"), jpegBytes()).status, 201);
+
+    // % and _ in titles must be matched literally
+    QVERIFY(writeJsonFile(env->media() + QStringLiteral("/wald/anna.json"),
+                          {{QStringLiteral("title"), QStringLiteral("100% Natur")}, {QStringLiteral("location"), QStringLiteral("Eifel")}}));
+    QVERIFY(writeJsonFile(env->media() + QStringLiteral("/wald/berta.json"),
+                          {{QStringLiteral("title"), QStringLiteral("1000 Natur")}, {QStringLiteral("enabled"), false}}));
+    QVERIFY(writeJsonFile(env->media() + QStringLiteral("/wald/carla.json"),
+                          {{QStringLiteral("title"), QStringLiteral("a_b")}, {QStringLiteral("description"), QStringLiteral("Morgennebel")}}));
+    QVERIFY(writeJsonFile(env->media() + QStringLiteral("/wald/dora.json"), {{QStringLiteral("title"), QStringLiteral("axb")}}));
+    setTaken(env->media() + QStringLiteral("/wald/anna.jpg"), "2020:05:01 06:00:00");
+    setTaken(env->media() + QStringLiteral("/wald/carla.jpg"), "2022:09:12 18:30:00");
+    env->sync();
+
+    // New fields: size on disk and a version that follows the file
+    QJsonArray items = env->get(QStringLiteral("/api/media")).object().value(u"items").toArray();
+    QCOMPARE(items.size(), 5);
+    for (const QJsonValue &value : items) {
+        const QJsonObject item = value.toObject();
+        const QFileInfo file(env->media() + u'/' + item.value(u"path").toString());
+        QCOMPARE(item.value(u"fileSize").toInteger(), file.size());
+        QCOMPARE(item.value(u"version").toInteger(), file.lastModified().toMSecsSinceEpoch());
+    }
+
+    const auto search = [&](const QString &query) {
+        QStringList paths = pathsOf(env->get(QStringLiteral("/api/media?") + query).object().value(u"items").toArray());
+        paths.sort();
+        return paths;
+    };
+    QCOMPARE(search(QStringLiteral("q=100%25")), QStringList{QStringLiteral("wald/anna.jpg")});
+    QCOMPARE(search(QStringLiteral("q=a_b")), QStringList{QStringLiteral("wald/carla.jpg")});
+    QCOMPARE(search(QStringLiteral("q=eifel")), QStringList{QStringLiteral("wald/anna.jpg")});       // location, any case
+    QCOMPARE(search(QStringLiteral("q=Morgennebel")), QStringList{QStringLiteral("wald/carla.jpg")}); // description
+    QCOMPARE(search(QStringLiteral("q=fuchs")), QStringList{QStringLiteral("Fuchs.jpg")});            // path
+    QCOMPARE(search(QStringLiteral("q=natur&album=wald")),
+             (QStringList{QStringLiteral("wald/anna.jpg"), QStringLiteral("wald/berta.jpg")}));
+    QCOMPARE(env->get(QStringLiteral("/api/media?q=natur")).object().value(u"total").toInt(), 2);
+
+    QCOMPARE(search(QStringLiteral("enabled=false")), QStringList{QStringLiteral("wald/berta.jpg")});
+    QCOMPARE(search(QStringLiteral("enabled=true")).size(), 4);
+    QCOMPARE(env->get(QStringLiteral("/api/media?enabled=false")).object().value(u"total").toInt(), 1);
+    QCOMPARE(search(QStringLiteral("enabled=quatsch")).size(), 5); // ignored
+
+    const auto ordered = [&](const QString &query) {
+        return pathsOf(env->get(QStringLiteral("/api/media?") + query).object().value(u"items").toArray());
+    };
+    const QStringList byName{QStringLiteral("Fuchs.jpg"), QStringLiteral("wald/anna.jpg"), QStringLiteral("wald/berta.jpg"),
+                             QStringLiteral("wald/carla.jpg"), QStringLiteral("wald/dora.jpg")};
+    QCOMPARE(ordered(QStringLiteral("sort=name&order=asc")), byName);
+    QStringList reversed = byName;
+    std::reverse(reversed.begin(), reversed.end());
+    QCOMPARE(ordered(QStringLiteral("sort=name")), reversed); // descending by default
+
+    // Undated pictures come last, whatever the direction
+    QStringList takenDesc = ordered(QStringLiteral("sort=taken"));
+    QCOMPARE(takenDesc.mid(0, 2), (QStringList{QStringLiteral("wald/carla.jpg"), QStringLiteral("wald/anna.jpg")}));
+    QStringList takenAsc = ordered(QStringLiteral("sort=taken&order=asc"));
+    QCOMPARE(takenAsc.mid(0, 2), (QStringList{QStringLiteral("wald/anna.jpg"), QStringLiteral("wald/carla.jpg")}));
+    QCOMPARE(takenDesc.size(), 5);
+    QCOMPARE(takenAsc.size(), 5);
+
+    // Paging over a sorted list
+    QCOMPARE(ordered(QStringLiteral("sort=name&order=asc&offset=1&limit=2")), byName.mid(1, 2));
+}
+
+void TestApi::albumCovers()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    QVERIFY(env->login());
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?album=alpen&name=a.jpg"), jpegBytes()).status, 201);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?album=alpen&name=b.jpg"), jpegBytes()).status, 201);
+    QCOMPARE(env->post(QStringLiteral("/api/albums"), {{QStringLiteral("name"), QStringLiteral("leer")}}).status, 201);
+    env->sync();
+
+    const QJsonArray media = env->get(QStringLiteral("/api/media?album=alpen")).object().value(u"items").toArray();
+    qint64 newest = 0;
+    qint64 newestVersion = 0;
+    for (const QJsonValue &item : media) {
+        if (item.toObject().value(u"id").toInteger() > newest) {
+            newest = item.toObject().value(u"id").toInteger();
+            newestVersion = item.toObject().value(u"version").toInteger();
+        }
+    }
+
+    QJsonObject alpen;
+    QJsonObject leer;
+    for (const QJsonValue &album : env->get(QStringLiteral("/api/albums")).array()) {
+        if (album.toObject().value(u"name").toString() == u"alpen")
+            alpen = album.toObject();
+        if (album.toObject().value(u"name").toString() == u"leer")
+            leer = album.toObject();
+    }
+    QCOMPARE(alpen.value(u"cover").toObject().value(u"id").toInteger(), newest);
+    QCOMPARE(alpen.value(u"cover").toObject().value(u"version").toInteger(), newestVersion);
+    QVERIFY(!leer.isEmpty());
+    QVERIFY(!leer.contains(QStringLiteral("cover")));
+}
+
+void TestApi::batch()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    QVERIFY(env->login());
+    for (const char *name : {"a.jpg", "b.jpg", "c.jpg"})
+        QCOMPARE(env->request("POST", QStringLiteral("/api/media?album=alpen&name=%1").arg(QLatin1String(name)), jpegBytes()).status, 201);
+    QVERIFY(writeJsonFile(env->media() + QStringLiteral("/alpen/b.json"), {{QStringLiteral("title"), QStringLiteral("Bergsee")}}));
+    env->sync();
+    const QJsonArray items = env->get(QStringLiteral("/api/media")).object().value(u"items").toArray();
+    const qint64 a = idOf(items, QStringLiteral("alpen/a.jpg"));
+    const qint64 b = idOf(items, QStringLiteral("alpen/b.jpg"));
+    const qint64 c = idOf(items, QStringLiteral("alpen/c.jpg"));
+    QSignalSpy sync(env->server.get(), &ApiServer::syncRequested);
+
+    const auto run = [&](const QJsonObject &body) {
+        return env->request("POST", QStringLiteral("/api/media/batch"), jsonBytes(body), {{"Content-Type", "application/json"}});
+    };
+
+    // Hide two, one unknown id
+    Response result = run({{QStringLiteral("ids"), QJsonArray{a, b, 999}}, {QStringLiteral("action"), QStringLiteral("disable")}});
+    QCOMPARE(result.status, 200);
+    QCOMPARE(result.object().value(u"done").toInt(), 2);
+    const QJsonArray failed = result.object().value(u"failed").toArray();
+    QCOMPARE(failed.size(), 1);
+    QCOMPARE(failed.at(0).toObject().value(u"id").toInteger(), 999);
+    QVERIFY(!failed.at(0).toObject().value(u"error").toString().isEmpty());
+    QCOMPARE(sync.count(), 1);
+    QCOMPARE(readJsonFile(env->media() + QStringLiteral("/alpen/a.json")).value(u"enabled").toBool(true), false);
+    QCOMPARE(readJsonFile(env->media() + QStringLiteral("/alpen/b.json")).value(u"title").toString(), QStringLiteral("Bergsee"));
+    env->sync();
+    QCOMPARE(env->get(QStringLiteral("/api/media?enabled=false")).object().value(u"total").toInt(), 2);
+
+    // Showing again removes the key; a sidecar that only held it goes away
+    result = run({{QStringLiteral("ids"), QJsonArray{a, b}}, {QStringLiteral("action"), QStringLiteral("enable")}});
+    QCOMPARE(result.object().value(u"done").toInt(), 2);
+    QVERIFY(!QFileInfo::exists(env->media() + QStringLiteral("/alpen/a.json")));
+    QCOMPARE(readJsonFile(env->media() + QStringLiteral("/alpen/b.json")),
+             (QJsonObject{{QStringLiteral("title"), QStringLiteral("Bergsee")}}));
+
+    // Move: file and sidecar, modification time kept, the library keeps the ids
+    const QDateTime modified = QFileInfo(env->media() + QStringLiteral("/alpen/b.jpg")).lastModified();
+    result = run({{QStringLiteral("ids"), QJsonArray{b}}, {QStringLiteral("action"), QStringLiteral("move")},
+                  {QStringLiteral("album"), QStringLiteral("reisen/see")}});
+    QCOMPARE(result.status, 200);
+    QCOMPARE(result.object().value(u"done").toInt(), 1);
+    QVERIFY(!QFileInfo::exists(env->media() + QStringLiteral("/alpen/b.jpg")));
+    QVERIFY(QFileInfo::exists(env->media() + QStringLiteral("/reisen/see/b.jpg")));
+    QVERIFY(QFileInfo::exists(env->media() + QStringLiteral("/reisen/see/b.json")));
+    QCOMPARE(QFileInfo(env->media() + QStringLiteral("/reisen/see/b.jpg")).lastModified(), modified);
+    env->sync();
+    const QJsonObject moved = env->get(QStringLiteral("/api/media/%1").arg(b)).object();
+    QCOMPARE(moved.value(u"path").toString(), QStringLiteral("reisen/see/b.jpg"));
+    QCOMPARE(moved.value(u"album").toString(), QStringLiteral("reisen/see"));
+    QCOMPARE(moved.value(u"title").toString(), QStringLiteral("Bergsee"));
+
+    // Into the root folder
+    result = run({{QStringLiteral("ids"), QJsonArray{c}}, {QStringLiteral("action"), QStringLiteral("move")},
+                  {QStringLiteral("album"), QString()}});
+    QCOMPARE(result.object().value(u"done").toInt(), 1);
+    QVERIFY(QFileInfo::exists(env->media() + QStringLiteral("/c.jpg")));
+
+    // Delete goes to the trash
+    result = run({{QStringLiteral("ids"), QJsonArray{a}}, {QStringLiteral("action"), QStringLiteral("delete")}});
+    QCOMPARE(result.object().value(u"done").toInt(), 1);
+    QVERIFY(!QFileInfo::exists(env->media() + QStringLiteral("/alpen/a.jpg")));
+    QCOMPARE(filesBelow(env->path(QStringLiteral("trash"))).size(), 1);
+    env->sync();
+    QCOMPARE(env->get(QStringLiteral("/api/media")).object().value(u"total").toInt(), 2);
+    QCOMPARE(env->get(QStringLiteral("/api/media/%1").arg(c)).object().value(u"path").toString(), QStringLiteral("c.jpg"));
+}
+
+void TestApi::batchErrors()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    QVERIFY(env->login());
+    QSignalSpy sync(env->server.get(), &ApiServer::syncRequested);
+    const auto run = [&](const QByteArray &body, bool csrf = true) {
+        return env->request("POST", QStringLiteral("/api/media/batch"), body, {{"Content-Type", "application/json"}}, csrf).status;
+    };
+
+    QCOMPARE(run(jsonBytes({{QStringLiteral("ids"), QJsonArray{1}}, {QStringLiteral("action"), QStringLiteral("enable")}}), false), 403);
+    QCOMPARE(run(jsonBytes({{QStringLiteral("ids"), QJsonArray{1}}, {QStringLiteral("action"), QStringLiteral("explode")}})), 400);
+    QCOMPARE(run(jsonBytes({{QStringLiteral("action"), QStringLiteral("enable")}})), 400);
+    QCOMPARE(run(jsonBytes({{QStringLiteral("ids"), 5}, {QStringLiteral("action"), QStringLiteral("enable")}})), 400);
+    QCOMPARE(run("kein json"), 400);
+    QCOMPARE(run(jsonBytes({{QStringLiteral("ids"), QJsonArray{1}}, {QStringLiteral("action"), QStringLiteral("move")},
+                            {QStringLiteral("album"), QStringLiteral("../raus")}})), 400);
+    QCOMPARE(run(jsonBytes({{QStringLiteral("ids"), QJsonArray{1}}, {QStringLiteral("action"), QStringLiteral("move")},
+                            {QStringLiteral("album"), QStringLiteral(".versteckt")}})), 400);
+
+    QJsonArray many;
+    for (int i = 0; i < 1001; ++i)
+        many.append(i);
+    QCOMPARE(run(jsonBytes({{QStringLiteral("ids"), many}, {QStringLiteral("action"), QStringLiteral("enable")}})), 400);
+
+    // Nothing done, nothing to sync
+    const Response none = env->request("POST", QStringLiteral("/api/media/batch"),
+                                       jsonBytes({{QStringLiteral("ids"), QJsonArray{42}}, {QStringLiteral("action"), QStringLiteral("delete")}}));
+    QCOMPARE(none.status, 200);
+    QCOMPARE(none.object().value(u"done").toInt(), 0);
+    QCOMPARE(none.object().value(u"failed").toArray().size(), 1);
+    QCOMPARE(sync.count(), 0);
+}
+
+void TestApi::renameAlbum()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    QVERIFY(env->login());
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?album=alpen&name=a.jpg"), jpegBytes()).status, 201);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?album=alpen/hoch&name=b.jpg"), jpegBytes()).status, 201);
+    QCOMPARE(env->post(QStringLiteral("/api/albums"), {{QStringLiteral("name"), QStringLiteral("wald")}}).status, 201);
+    env->sync();
+    const QJsonArray before = env->get(QStringLiteral("/api/media")).object().value(u"items").toArray();
+    const qint64 a = idOf(before, QStringLiteral("alpen/a.jpg"));
+    const qint64 b = idOf(before, QStringLiteral("alpen/hoch/b.jpg"));
+    QSignalSpy sync(env->server.get(), &ApiServer::syncRequested);
+
+    const auto rename = [&](const QString &from, const QString &to, bool csrf = true) {
+        return env->request("PATCH", QStringLiteral("/api/albums"),
+                            jsonBytes({{QStringLiteral("from"), from}, {QStringLiteral("to"), to}}),
+                            {{"Content-Type", "application/json"}}, csrf);
+    };
+
+    QCOMPARE(rename(QStringLiteral("alpen"), QStringLiteral("berge"), false).status, 403);
+    QCOMPARE(rename(QStringLiteral("alpen"), QStringLiteral("wald")).status, 409);
+    QCOMPARE(rename(QStringLiteral("gibt-es-nicht"), QStringLiteral("neu")).status, 404);
+    QCOMPARE(rename(QString(), QStringLiteral("neu")).status, 400);
+    QCOMPARE(rename(QStringLiteral("alpen"), QString()).status, 400);
+    QCOMPARE(rename(QStringLiteral("alpen"), QStringLiteral("../raus")).status, 400);
+    QCOMPARE(rename(QStringLiteral("alpen"), QStringLiteral("alpen/drinnen")).status, 400);
+    QCOMPARE(env->request("PATCH", QStringLiteral("/api/albums"), "kein json").status, 400);
+    QCOMPARE(sync.count(), 0);
+
+    // Renaming may also move the album below another one
+    const Response renamed = rename(QStringLiteral("alpen"), QStringLiteral("reisen/berge"));
+    QCOMPARE(renamed.status, 200);
+    QCOMPARE(renamed.object().value(u"name").toString(), QStringLiteral("reisen/berge"));
+    QCOMPARE(sync.count(), 1);
+    QVERIFY(!QFileInfo::exists(env->media() + QStringLiteral("/alpen")));
+    QVERIFY(QFileInfo::exists(env->media() + QStringLiteral("/reisen/berge/hoch/b.jpg")));
+
+    // The library sees the moves: same ids, new paths
+    env->sync();
+    QCOMPARE(env->get(QStringLiteral("/api/media/%1").arg(a)).object().value(u"path").toString(), QStringLiteral("reisen/berge/a.jpg"));
+    QCOMPARE(env->get(QStringLiteral("/api/media/%1").arg(b)).object().value(u"album").toString(), QStringLiteral("reisen/berge/hoch"));
+    QCOMPARE(env->get(QStringLiteral("/api/media")).object().value(u"total").toInt(), 2);
+}
+
+void TestApi::deleteAlbum()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    QVERIFY(env->login());
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?album=alpen&name=a.jpg"), jpegBytes()).status, 201);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?album=alpen/hoch&name=b.jpg"), jpegBytes()).status, 201);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?name=bleibt.jpg"), jpegBytes()).status, 201);
+    env->sync();
+    QSignalSpy sync(env->server.get(), &ApiServer::syncRequested);
+
+    QCOMPARE(env->request("DELETE", QStringLiteral("/api/albums?name=alpen"), {}, {}, false).status, 403);
+    QCOMPARE(env->request("DELETE", QStringLiteral("/api/albums?name=")).status, 400);
+    QCOMPARE(env->request("DELETE", QStringLiteral("/api/albums")).status, 400);
+    QCOMPARE(env->request("DELETE", QStringLiteral("/api/albums?name=..%2F..")).status, 400);
+    QCOMPARE(env->request("DELETE", QStringLiteral("/api/albums?name=gibt-es-nicht")).status, 404);
+    QCOMPARE(sync.count(), 0);
+
+    QCOMPARE(env->request("DELETE", QStringLiteral("/api/albums?name=alpen")).status, 204);
+    QCOMPARE(sync.count(), 1);
+    QVERIFY(!QFileInfo::exists(env->media() + QStringLiteral("/alpen")));
+    QVERIFY(QFileInfo::exists(env->media() + QStringLiteral("/bleibt.jpg")));
+
+    // trash/<stamp>/alpen/… with everything that was in it
+    const QStringList trash = filesBelow(env->path(QStringLiteral("trash")));
+    QCOMPARE(trash.size(), 2);
+    QVERIFY(trash.at(0).endsWith(QStringLiteral("/alpen/a.jpg")));
+    QVERIFY(trash.at(1).endsWith(QStringLiteral("/alpen/hoch/b.jpg")));
+
+    env->sync();
+    QCOMPARE(env->get(QStringLiteral("/api/media")).object().value(u"total").toInt(), 1);
+}
+
+void TestApi::changePassword()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    const Response login = env->post(QStringLiteral("/api/auth/login"),
+                                     {{QStringLiteral("username"), QStringLiteral("admin")},
+                                      {QStringLiteral("password"), QStringLiteral("geheim123")}});
+    QCOMPARE(login.status, 200);
+    const QByteArray oldCookie = login.header("Set-Cookie").split(';').constFirst();
+
+    const auto change = [&](const QString &current, const QString &next, bool csrf = true) {
+        return env->request("POST", QStringLiteral("/api/auth/password"),
+                            jsonBytes({{QStringLiteral("current"), current}, {QStringLiteral("new"), next}}),
+                            {{"Content-Type", "application/json"}}, csrf);
+    };
+
+    QCOMPARE(change(QStringLiteral("geheim123"), QStringLiteral("neuesPasswort"), false).status, 403);
+    QCOMPARE(change(QStringLiteral("falsch"), QStringLiteral("neuesPasswort")).status, 403);
+    QCOMPARE(change(QStringLiteral("geheim123"), QStringLiteral("kurz")).status, 400);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/auth/password"), "kein json").status, 400);
+    QVERIFY(env->login()); // nothing changed so far
+    // (logging in again replaced the cookie; the old one is still a valid session)
+
+    const Response changed = change(QStringLiteral("geheim123"), QStringLiteral("neuesPasswort"));
+    QCOMPARE(changed.status, 204);
+    const QByteArray cleared = changed.header("Set-Cookie");
+    QVERIFY2(cleared.startsWith("berry_session=;"), cleared.constData());
+    QVERIFY(cleared.contains("Max-Age=0"));
+
+    // Every session has ended, including ones the browser did not drop
+    QCOMPARE(env->get(QStringLiteral("/api/status")).status, 401);
+    QCOMPARE(env->request("GET", QStringLiteral("/api/status"), {}, {{"Cookie", oldCookie}}).status, 401);
+    QVERIFY(!env->login());
+    QVERIFY(env->login(QStringLiteral("neuesPasswort")));
+    QCOMPARE(env->get(QStringLiteral("/api/status")).status, 200);
+
+    // Not logged in: no password change
+    QCOMPARE(env->request("POST", QStringLiteral("/api/auth/logout")).status, 204);
+    QCOMPARE(change(QStringLiteral("neuesPasswort"), QStringLiteral("nochEinPasswort")).status, 401);
+    QVERIFY(env->login(QStringLiteral("neuesPasswort")));
 }
 
 QTEST_GUILESS_MAIN(TestApi)

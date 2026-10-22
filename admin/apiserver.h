@@ -54,7 +54,11 @@ private:
     QHttpServerResponse updateMedia(qint64 id, const QHttpServerRequest &request);
     QHttpServerResponse deleteMedia(qint64 id);
     QHttpServerResponse mediaFile(qint64 id, const QString &kind);
+    QHttpServerResponse batchMedia(const QHttpServerRequest &request);
     QHttpServerResponse upload(const QHttpServerRequest &request);
+    QHttpServerResponse renameAlbum(const QHttpServerRequest &request);
+    QHttpServerResponse deleteAlbum(const QHttpServerRequest &request);
+    QHttpServerResponse changePassword(const QHttpServerRequest &request);
     QHttpServerResponse listAlbums();
     QHttpServerResponse createAlbum(const QHttpServerRequest &request);
     QHttpServerResponse getConfig();

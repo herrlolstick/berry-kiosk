@@ -7,6 +7,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <optional>
+
 class QSqlDatabase;
 
 namespace berry {
@@ -16,6 +18,7 @@ struct SyncResult
     int added = 0;
     int updated = 0;
     int removed = 0;
+    int moved = 0; // same file in another place, keeps id and renditions
     int unchanged = 0;
     bool skipped = false; // media root missing, library left alone
 };
@@ -83,18 +86,23 @@ bool readLibrary(const QString &databasePath, const QString &mediaRoot, const QS
 QString renditionFilePath(const QString &cacheRoot, qint64 imageId, const QString &kind);
 
 // Read side for the admin API, read-only like readLibrary. Media objects carry
-// id, path, album, width, height, enabled, addedAt, renditions (kinds) and,
+// id, path, album, width, height, enabled, addedAt, fileSize, version (changes
+// with the file), renditions (kinds) and,
 // where known, title, description, location, camera, lens, taken, aperture,
 // exposureTime, focalLength, iso, quote and quoteAuthor.
 struct MediaQuery
 {
-    QString album; // including sub folders, '' = all
+    QString album;               // including sub folders, '' = all
+    QString search;              // in title, location, description and path
+    std::optional<bool> enabled; // only shown or only hidden pictures
+    QString sort = QStringLiteral("added"); // "added", "taken" or "name"
+    bool ascending = false;
     int offset = 0;
     int limit = 100;
 };
 QJsonObject queryMedia(const QString &databasePath, const MediaQuery &query, QString *error = nullptr); // { total, items }
 QJsonObject mediaById(const QString &databasePath, qint64 id, QString *error = nullptr); // empty when unknown
 qint64 mediaIdByPath(const QString &databasePath, const QString &relativePath);         // 0 when unknown
-QJsonArray albumCounts(const QString &databasePath, QString *error = nullptr); // [{ name, count, enabled }]
+QJsonArray albumCounts(const QString &databasePath, QString *error = nullptr); // [{ name, count, enabled, cover: { id, version } }]
 
 } // namespace berry

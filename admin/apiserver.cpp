@@ -19,6 +19,7 @@
 #include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QStorageInfo>
 #include <QTcpServer>
@@ -89,6 +90,13 @@ QByteArray contentType(const QString &path)
     if (suffix == u"svg")
         return "image/svg+xml";
     return "application/octet-stream";
+}
+
+// File names of the bundled web UI: no folders, nothing hidden
+bool isAssetName(const QString &name)
+{
+    static const QRegularExpression pattern(QStringLiteral("^[A-Za-z0-9][A-Za-z0-9._-]*$"));
+    return pattern.match(name).hasMatch() && !name.contains(QStringLiteral(".."));
 }
 
 QHttpServerResponse serveFile(const QString &path, bool cacheable)
@@ -237,8 +245,14 @@ void ApiServer::addRoutes()
 {
     // Built-in web UI
     m_http.route(QStringLiteral("/"), Method::Get, [] { return serveFile(QStringLiteral(":/www/index.html"), false); });
-    m_http.route(QStringLiteral("/app.js"), Method::Get, [] { return serveFile(QStringLiteral(":/www/app.js"), false); });
-    m_http.route(QStringLiteral("/app.css"), Method::Get, [] { return serveFile(QStringLiteral(":/www/app.css"), false); });
+    for (const char *folder : {"js", "css", "assets"}) {
+        const QString name = QLatin1String(folder);
+        m_http.route(QStringLiteral("/%1/<arg>").arg(name), Method::Get, [name](const QString &file) {
+            if (!isAssetName(file))
+                return fail(Status::NotFound, QStringLiteral("Datei nicht gefunden"));
+            return serveFile(QStringLiteral(":/www/%1/%2").arg(name, file), false);
+        });
+    }
 
     m_http.route(QStringLiteral("/api/auth/session"), Method::Get,
                  [this](const QHttpServerRequest &request) { return session(request); });
@@ -246,6 +260,12 @@ void ApiServer::addRoutes()
                  [this](const QHttpServerRequest &request) { return login(request); });
     m_http.route(QStringLiteral("/api/auth/logout"), Method::Post,
                  [this](const QHttpServerRequest &request) { return logout(request); });
+
+    m_http.route(QStringLiteral("/api/auth/password"), Method::Post, [this](const QHttpServerRequest &request) {
+        if (auto denied = checkAccess(request, true))
+            return std::move(*denied);
+        return changePassword(request);
+    });
 
     m_http.route(QStringLiteral("/api/status"), Method::Get, [this](const QHttpServerRequest &request) {
         if (auto denied = checkAccess(request, false))
@@ -262,6 +282,11 @@ void ApiServer::addRoutes()
         if (auto denied = checkAccess(request, true))
             return std::move(*denied);
         return upload(request);
+    });
+    m_http.route(QStringLiteral("/api/media/batch"), Method::Post, [this](const QHttpServerRequest &request) {
+        if (auto denied = checkAccess(request, true))
+            return std::move(*denied);
+        return batchMedia(request);
     });
     m_http.route(QStringLiteral("/api/media/<arg>"), Method::Get, [this](qint64 id, const QHttpServerRequest &request) {
         if (auto denied = checkAccess(request, false))
@@ -298,6 +323,17 @@ void ApiServer::addRoutes()
         if (auto denied = checkAccess(request, true))
             return std::move(*denied);
         return createAlbum(request);
+    });
+
+    m_http.route(QStringLiteral("/api/albums"), Method::Patch, [this](const QHttpServerRequest &request) {
+        if (auto denied = checkAccess(request, true))
+            return std::move(*denied);
+        return renameAlbum(request);
+    });
+    m_http.route(QStringLiteral("/api/albums"), Method::Delete, [this](const QHttpServerRequest &request) {
+        if (auto denied = checkAccess(request, true))
+            return std::move(*denied);
+        return deleteAlbum(request);
     });
 
     m_http.route(QStringLiteral("/api/config"), Method::Get, [this](const QHttpServerRequest &request) {
@@ -446,6 +482,14 @@ QHttpServerResponse ApiServer::listMedia(const QHttpServerRequest &request)
     mediaQuery.album = query.queryItemValue(QStringLiteral("album"), QUrl::FullyDecoded);
     mediaQuery.offset = query.queryItemValue(QStringLiteral("offset")).toInt();
     mediaQuery.limit = query.hasQueryItem(QStringLiteral("limit")) ? query.queryItemValue(QStringLiteral("limit")).toInt() : 100;
+    mediaQuery.search = query.queryItemValue(QStringLiteral("q"), QUrl::FullyDecoded);
+    const QString enabled = query.queryItemValue(QStringLiteral("enabled"));
+    if (enabled == u"true" || enabled == u"false")
+        mediaQuery.enabled = enabled == u"true";
+    const QString sort = query.queryItemValue(QStringLiteral("sort"));
+    if (sort == u"taken" || sort == u"name")
+        mediaQuery.sort = sort;
+    mediaQuery.ascending = query.queryItemValue(QStringLiteral("order")) == u"asc";
 
     QString error;
     const QJsonObject result = berry::queryMedia(config().library().database, mediaQuery, &error);
@@ -686,4 +730,133 @@ QHttpServerResponse ApiServer::screenshot(const QHttpServerRequest &request)
     if (reply.isEmpty())
         return fail(Status::ServiceUnavailable, error);
     return finish(QHttpServerResponse("image/jpeg", reply.value(QStringLiteral("image")).toByteArray()));
+}
+
+QHttpServerResponse ApiServer::changePassword(const QHttpServerRequest &request)
+{
+    const auto body = jsonBody(request);
+    if (!body)
+        return fail(Status::BadRequest, QStringLiteral("JSON mit current und new erwartet"));
+
+    const Credentials stored = credentials();
+    const QHostAddress address = request.remoteAddress();
+    if (!stored.verify(stored.username, body->value(u"current").toString())) {
+        m_throttle.recordFailure(address); // same brake as for the login
+        return fail(Status::Forbidden, QStringLiteral("Das aktuelle Passwort ist falsch"));
+    }
+    const QString password = body->value(u"new").toString();
+    if (password.size() < Credentials::kMinimumPasswordLength) {
+        return fail(Status::BadRequest,
+                    QStringLiteral("Das neue Passwort braucht mindestens %1 Zeichen").arg(Credentials::kMinimumPasswordLength));
+    }
+
+    QString error;
+    const QString path = credentialsPath(config().library().stateDir);
+    if (!saveCredentials(path, Credentials::create(stored.username, password), &error))
+        return fail(Status::InternalServerError, error);
+    // The new hash is a new stamp: every session, this one included, has ended
+    qInfo().noquote() << "Passwort geändert für" << stored.username;
+    return withCookie(empty(), sessionCookie(QString(), 0));
+}
+
+QHttpServerResponse ApiServer::batchMedia(const QHttpServerRequest &request)
+{
+    const auto body = jsonBody(request);
+    if (!body || !body->value(u"ids").isArray())
+        return fail(Status::BadRequest, QStringLiteral("JSON mit ids und action erwartet"));
+    const QJsonArray ids = body->value(u"ids").toArray();
+    if (ids.size() > 1000)
+        return fail(Status::BadRequest, QStringLiteral("Höchstens 1000 Bilder auf einmal"));
+
+    const QString action = body->value(u"action").toString();
+    if (action != u"enable" && action != u"disable" && action != u"delete" && action != u"move")
+        return fail(Status::BadRequest, QStringLiteral("Unbekannte Aktion \"%1\"").arg(action));
+
+    const berry::Config cfg = config();
+    const QString mediaRoot = cfg.mediaRoot();
+    QString targetDirectory;
+    if (action == u"move") {
+        targetDirectory = berry::albumDirectory(mediaRoot, body->value(u"album").toString());
+        if (targetDirectory.isEmpty())
+            return fail(Status::BadRequest, QStringLiteral("Ungültiges Album"));
+    }
+
+    int done = 0;
+    QJsonArray failed;
+    for (const QJsonValue &value : ids) {
+        const qint64 id = value.toInteger();
+        const QJsonObject media = berry::mediaById(cfg.library().database, id);
+        QString error;
+        if (media.isEmpty()) {
+            error = QStringLiteral("unbekannt");
+        } else {
+            const QString image = QDir(mediaRoot).filePath(media.value(u"path").toString());
+            bool ok = false;
+            if (action == u"enable" || action == u"disable") {
+                const QJsonValue enabled = action == u"enable" ? QJsonValue(QJsonValue::Null) : QJsonValue(false);
+                ok = berry::updateSidecar(image, QJsonObject{{QStringLiteral("enabled"), enabled}}, &error);
+            } else if (action == u"delete") {
+                ok = berry::moveToTrash(mediaRoot, cfg.library().trashDir, image, &error);
+            } else {
+                ok = !berry::moveImage(image, targetDirectory, &error).isEmpty();
+            }
+            if (ok)
+                ++done;
+        }
+        if (!error.isEmpty())
+            failed.append(QJsonObject{{QStringLiteral("id"), id}, {QStringLiteral("error"), error}});
+    }
+
+    qInfo().noquote() << QStringLiteral("Mehrfachaktion %1: %2 erledigt, %3 fehlgeschlagen").arg(action).arg(done).arg(failed.size());
+    if (done > 0)
+        emit syncRequested();
+    return json(QJsonObject{{QStringLiteral("done"), done}, {QStringLiteral("failed"), failed}});
+}
+
+QHttpServerResponse ApiServer::renameAlbum(const QHttpServerRequest &request)
+{
+    const auto body = jsonBody(request);
+    if (!body)
+        return fail(Status::BadRequest, QStringLiteral("JSON mit from und to erwartet"));
+
+    const berry::Config cfg = config();
+    const QString root = QDir::cleanPath(cfg.mediaRoot());
+    const QString from = berry::albumDirectory(root, body->value(u"from").toString());
+    const QString to = berry::albumDirectory(root, body->value(u"to").toString());
+    if (from.isEmpty() || to.isEmpty() || from == root || to == root)
+        return fail(Status::BadRequest, QStringLiteral("Ungültiger Albumname"));
+    if (!QFileInfo(from).isDir())
+        return fail(Status::NotFound, QStringLiteral("Album gibt es nicht"));
+    if (QFileInfo::exists(to))
+        return fail(Status::Conflict, QStringLiteral("Ein Album mit diesem Namen gibt es schon"));
+    if (to.startsWith(from + u'/'))
+        return fail(Status::BadRequest, QStringLiteral("Ein Album lässt sich nicht in sich selbst verschieben"));
+
+    QDir().mkpath(QFileInfo(to).absolutePath());
+    if (!QDir().rename(from, to))
+        return fail(Status::InternalServerError, QStringLiteral("Umbenennen fehlgeschlagen"));
+    // Files keep name, size and time: the library sees moves, ids and renditions stay
+    const QString name = QDir(root).relativeFilePath(to);
+    qInfo().noquote() << "Album umbenannt:" << QDir(root).relativeFilePath(from) << "->" << name;
+    emit syncRequested();
+    return json(QJsonObject{{QStringLiteral("name"), name}});
+}
+
+QHttpServerResponse ApiServer::deleteAlbum(const QHttpServerRequest &request)
+{
+    const berry::Config cfg = config();
+    const QString root = QDir::cleanPath(cfg.mediaRoot());
+    const QString name = request.query().queryItemValue(QStringLiteral("name"), QUrl::FullyDecoded);
+    const QString folder = berry::albumDirectory(root, name);
+    if (folder.isEmpty() || folder == root)
+        return fail(Status::BadRequest, QStringLiteral("Ungültiges Album"));
+    if (!QFileInfo(folder).isDir())
+        return fail(Status::NotFound, QStringLiteral("Album gibt es nicht"));
+
+    QString error;
+    if (!berry::moveFolderToTrash(root, cfg.library().trashDir, folder, &error))
+        return fail(Status::InternalServerError, error);
+    qInfo().noquote() << "Album in den Papierkorb:" << QDir(root).relativeFilePath(folder);
+    emit syncRequested();
+    return empty();
 }

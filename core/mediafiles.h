@@ -23,4 +23,13 @@ QString uniqueFilePath(const QString &directory, const QString &fileName);
 bool moveToTrash(const QString &mediaRoot, const QString &trashRoot, const QString &imagePath,
                  QString *error = nullptr);
 
+// Moves a whole album folder with everything in it to the trash, like moveToTrash().
+bool moveFolderToTrash(const QString &mediaRoot, const QString &trashRoot, const QString &folder,
+                       QString *error = nullptr);
+
+// Moves an image and its sidecar into another folder below the media root,
+// keeping the modification time so the library recognises the move. Returns
+// the new path, or an empty string on failure.
+QString moveImage(const QString &imagePath, const QString &targetDirectory, QString *error = nullptr);
+
 } // namespace berry

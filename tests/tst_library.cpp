@@ -1,6 +1,7 @@
 #include "config.h"
 #include "imagemetadata.h"
 #include "library.h"
+#include "mediafiles.h"
 #include "renditions.h"
 #include "state.h"
 
@@ -37,6 +38,25 @@ void touchLater(const QString &path)
     QVERIFY(file.setFileTime(QDateTime::currentDateTime().addSecs(60), QFileDevice::FileModificationTime));
 }
 
+// Library ids by path relative to the media root
+QHash<QString, qint64> idsByPath(const QString &database, const QString &media, const QString &cache)
+{
+    QList<LibraryEntry> entries;
+    QHash<QString, qint64> ids;
+    if (!readLibrary(database, media, cache, QString(), &entries))
+        return ids;
+    for (const LibraryEntry &entry : std::as_const(entries))
+        ids.insert(QDir(media).relativeFilePath(entry.original), entry.id);
+    return ids;
+}
+
+void renderAll(Library &library, const QStringList &kinds)
+{
+    for (const RenditionJob &job : library.pendingRenditions(kinds, 1000))
+        QVERIFY(library.generate(job, 80));
+    QCOMPARE(library.pendingCount(kinds), 0);
+}
+
 QStringList relativeOriginals(const QList<LibraryEntry> &entries, const QString &root)
 {
     QStringList paths;
@@ -62,6 +82,9 @@ private slots:
     void syncAndRenditions();
     void brokenFilesAreNotRetried();
     void missingMediaRootKeepsLibrary();
+    void syncDetectsMoves();
+    void movedAlbumKeepsRenditions();
+    void renamedOrChangedFilesAreNotMoves();
 };
 
 void TestLibrary::initTestCase()
@@ -325,6 +348,143 @@ void TestLibrary::missingMediaRootKeepsLibrary()
     const SyncResult result = library.sync();
     QVERIFY(result.skipped);
     QCOMPARE(library.imageCount(), 1);
+}
+
+void TestLibrary::syncDetectsMoves()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString media = dir.filePath(QStringLiteral("media"));
+    const QString cache = dir.filePath(QStringLiteral("cache"));
+    const QString database = dir.filePath(QStringLiteral("library.db"));
+    writeImage(media + QStringLiteral("/a.jpg"), QSize(300, 200));
+    writeImage(media + QStringLiteral("/alpen/b.jpg"), QSize(200, 300));
+    QFile sidecar(media + QStringLiteral("/alpen/b.json"));
+    QVERIFY(sidecar.open(QIODevice::WriteOnly));
+    sidecar.write(R"({ "title": "Bergsee" })");
+    sidecar.close();
+
+    Library library(database, media, cache);
+    QVERIFY(library.open());
+    QCOMPARE(library.sync().added, 2);
+    const QStringList kinds{QStringLiteral("1080p"), QStringLiteral("thumb")};
+    renderAll(library, kinds);
+    const QHash<QString, qint64> before = idsByPath(database, media, cache);
+    const qint64 a = before.value(QStringLiteral("a.jpg"));
+    QVERIFY(a > 0);
+
+    // Moved by hand (Finder, rsync): rename keeps name, size and time
+    QVERIFY(QDir().mkpath(media + QStringLiteral("/wald")));
+    QVERIFY(QFile::rename(media + QStringLiteral("/a.jpg"), media + QStringLiteral("/wald/a.jpg")));
+    SyncResult result = library.sync();
+    QCOMPARE(result.moved, 1);
+    QCOMPARE(result.added, 0);
+    QCOMPARE(result.removed, 0);
+    QHash<QString, qint64> after = idsByPath(database, media, cache);
+    QCOMPARE(after.value(QStringLiteral("wald/a.jpg")), a);
+    QVERIFY(!after.contains(QStringLiteral("a.jpg")));
+    QCOMPARE(library.pendingCount(kinds), 0);
+    for (const QString &kind : kinds)
+        QVERIFY(QFileInfo::exists(renditionFilePath(cache, a, kind)));
+
+    // Moved through the web UI, together with the sidecar
+    const qint64 b = before.value(QStringLiteral("alpen/b.jpg"));
+    QString error;
+    QVERIFY2(!moveImage(media + QStringLiteral("/alpen/b.jpg"), media + QStringLiteral("/wald"), &error).isEmpty(), qPrintable(error));
+    result = library.sync();
+    QCOMPARE(result.moved, 1);
+    QCOMPARE(result.added + result.removed, 0);
+    after = idsByPath(database, media, cache);
+    QCOMPARE(after.value(QStringLiteral("wald/b.jpg")), b);
+    QCOMPARE(library.pendingCount(kinds), 0);
+    QVERIFY(QFileInfo::exists(renditionFilePath(cache, b, QStringLiteral("thumb"))));
+
+    // The album column follows the move, the sidecar still applies
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("moves"));
+        db.setDatabaseName(database);
+        QVERIFY(db.open());
+        QSqlQuery query(db);
+        QVERIFY(query.exec(QStringLiteral("SELECT album, title FROM images WHERE id = %1").arg(b)));
+        QVERIFY(query.next());
+        QCOMPARE(query.value(0).toString(), QStringLiteral("wald"));
+        QCOMPARE(query.value(1).toString(), QStringLiteral("Bergsee"));
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("moves"));
+
+    QCOMPARE(library.sync().unchanged, 2);
+}
+
+void TestLibrary::movedAlbumKeepsRenditions()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString media = dir.filePath(QStringLiteral("media"));
+    const QString cache = dir.filePath(QStringLiteral("cache"));
+    const QString database = dir.filePath(QStringLiteral("library.db"));
+    writeImage(media + QStringLiteral("/x/1.jpg"), QSize(100, 100));
+    writeImage(media + QStringLiteral("/x/2.jpg"), QSize(120, 100), Qt::darkRed);
+    writeImage(media + QStringLiteral("/x/tief/3.jpg"), QSize(100, 140), Qt::darkBlue);
+
+    Library library(database, media, cache);
+    QVERIFY(library.open());
+    QCOMPARE(library.sync().added, 3);
+    renderAll(library, {QStringLiteral("thumb")});
+    const QHash<QString, qint64> before = idsByPath(database, media, cache);
+
+    // Renaming the album folder moves everything in it
+    QVERIFY(QDir().rename(media + QStringLiteral("/x"), media + QStringLiteral("/y")));
+    const SyncResult result = library.sync();
+    QCOMPARE(result.moved, 3);
+    QCOMPARE(result.added + result.removed, 0);
+    const QHash<QString, qint64> after = idsByPath(database, media, cache);
+    QCOMPARE(after.value(QStringLiteral("y/1.jpg")), before.value(QStringLiteral("x/1.jpg")));
+    QCOMPARE(after.value(QStringLiteral("y/2.jpg")), before.value(QStringLiteral("x/2.jpg")));
+    QCOMPARE(after.value(QStringLiteral("y/tief/3.jpg")), before.value(QStringLiteral("x/tief/3.jpg")));
+    QCOMPARE(library.pendingCount({QStringLiteral("thumb")}), 0);
+
+    QList<LibraryEntry> entries;
+    QVERIFY(readLibrary(database, media, cache, QStringLiteral("y"), &entries));
+    QCOMPARE(entries.size(), 3);
+    QVERIFY(readLibrary(database, media, cache, QStringLiteral("x"), &entries));
+    QVERIFY(entries.isEmpty());
+}
+
+void TestLibrary::renamedOrChangedFilesAreNotMoves()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString media = dir.filePath(QStringLiteral("media"));
+    const QString cache = dir.filePath(QStringLiteral("cache"));
+    const QString database = dir.filePath(QStringLiteral("library.db"));
+    writeImage(media + QStringLiteral("/a.jpg"), QSize(100, 100));
+    writeImage(media + QStringLiteral("/c.jpg"), QSize(100, 100), Qt::darkRed);
+
+    Library library(database, media, cache);
+    QVERIFY(library.open());
+    QCOMPARE(library.sync().added, 2);
+    renderAll(library, {QStringLiteral("thumb")});
+    const QHash<QString, qint64> before = idsByPath(database, media, cache);
+    const QString oldThumb = renditionFilePath(cache, before.value(QStringLiteral("a.jpg")), QStringLiteral("thumb"));
+    QVERIFY(QFileInfo::exists(oldThumb));
+
+    // A new name is a new picture
+    QVERIFY(QFile::rename(media + QStringLiteral("/a.jpg"), media + QStringLiteral("/z.jpg")));
+    SyncResult result = library.sync();
+    QCOMPARE(result.moved, 0);
+    QCOMPARE(result.added, 1);
+    QCOMPARE(result.removed, 1);
+    QVERIFY(idsByPath(database, media, cache).value(QStringLiteral("z.jpg")) != before.value(QStringLiteral("a.jpg")));
+    QVERIFY(!QFileInfo::exists(oldThumb));
+
+    // Same name in another folder, but different content: not a move either
+    QVERIFY(QFile::remove(media + QStringLiteral("/c.jpg")));
+    writeImage(media + QStringLiteral("/anders/c.jpg"), QSize(400, 300), Qt::darkGreen);
+    result = library.sync();
+    QCOMPARE(result.moved, 0);
+    QCOMPARE(result.added, 1);
+    QCOMPARE(result.removed, 1);
+    QVERIFY(idsByPath(database, media, cache).value(QStringLiteral("anders/c.jpg")) != before.value(QStringLiteral("c.jpg")));
 }
 
 QTEST_GUILESS_MAIN(TestLibrary)

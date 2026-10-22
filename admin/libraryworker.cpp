@@ -58,11 +58,12 @@ void LibraryWorker::step()
         timer.start();
         const berry::SyncResult result = m_library->sync();
         m_kinds = wantedKinds();
-        if (result.added || result.updated || result.removed || !m_idle) {
-            qInfo().noquote() << QStringLiteral("Abgleich: %1 neu, %2 geändert, %3 entfernt, %4 unverändert (%5 ms) "
-                                                "– Varianten: %6")
+        if (result.added || result.updated || result.removed || result.moved || !m_idle) {
+            qInfo().noquote() << QStringLiteral("Abgleich: %1 neu, %2 geändert, %3 verschoben, %4 entfernt, "
+                                                "%5 unverändert (%6 ms) – Varianten: %7")
                                      .arg(result.added)
                                      .arg(result.updated)
+                                     .arg(result.moved)
                                      .arg(result.removed)
                                      .arg(result.unchanged)
                                      .arg(timer.elapsed())

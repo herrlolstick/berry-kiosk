@@ -5,8 +5,8 @@ photography in a living room or a public space. It runs without a desktop,
 straight on the screen (Qt Quick via eglfs/KMS), works on low-cost boards like
 the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 
-> **Status:** milestone 4 – slideshow, widgets, media library, image pipeline
-> and the admin web API with a small web console. The full web UI is next, see
+> **Status:** milestone 5 – slideshow, widgets, media library, image pipeline,
+> admin web API and the web UI for pictures and uploads. The grid editor is next, see
 > the [roadmap](#roadmap).
 
 ## Features
@@ -16,7 +16,8 @@ the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 - **Widgets:** clock, image info (title, location, date, camera settings from EXIF/IPTC/XMP) and quotes
 - **4K with automatic fallback to Full HD** (see below)
 - **Media library** (SQLite) with prepared 1080p/2160p renditions and thumbnails, kept up to date in the background
-- **Admin web API** with login, uploads, metadata editing and remote control of the display (next picture, pause, live screenshot), plus a small built-in web console
+- **Web UI** for phone and desktop: media library with search, filters and bulk actions, uploads (whole folders too), albums, editing titles and quotes, remote control of the display (next picture, pause, live screenshot)
+- **Admin web API** behind it, with login and CSRF protection
 - Images are decoded straight to their display size – even 24 MP JPEGs run on boards with 512 MB RAM
 - EXIF orientation, portrait screens (`rotation`), panoramas are capped at the GPU texture limit
 - `config.json` is reloaded while running
@@ -56,6 +57,10 @@ prepares renditions in the background:
   and gets sharper as the 2160p renditions come in.
 - Renditions are upright (EXIF orientation applied), newest pictures are done first,
   and broken files are skipped without being retried until they change.
+- Moved files are recognised (same name, size and modification time in a new
+  place): they keep their id and their renditions, so moving pictures between
+  albums – in the web UI, the Finder or with rsync – does not re-render 4K files on
+  the Pi. A renamed file counts as a new one.
 - Without a library (admin service not running) the display reads the folder directly.
 - The admin service runs with low CPU and I/O priority, so the slideshow never stutters.
 
@@ -73,9 +78,26 @@ state/          display.json and library.json – how display and admin service 
 
 ## Admin web API
 
-`berry-kiosk-admin` also serves a REST API and a small web console (compiled
-into the binary) on port 8080: open `http://<pi>.local:8080/`. The full web UI
-follows in milestone 5.
+`berry-kiosk-admin` also serves a REST API and the web UI (compiled into the
+binary) on port 8080: open `http://<pi>.local:8080/`.
+
+### Web UI
+
+| View | What it does |
+|---|---|
+| Übersicht | Live screenshot of the kiosk, status, next picture / pause, library and storage, latest pictures |
+| Mediathek | Grid with infinite scroll; filter by album, search, shown/hidden, sort; select pictures to show, hide, move or delete them; detail view with a large preview, metadata and editing of title, location, description, quote and "in der Diashow zeigen", arrow keys and swipe for the next picture |
+| Hochladen | Drop zone for files and whole folders (sub folders become sub albums), queue with progress and retries; one file at a time, as the server holds an upload in memory |
+| Alben | Album tree with covers and counts: create, rename/move, delete (to the trash) |
+| Einstellungen | Change the password; language, maximum resolution, rotation, renditions, JPEG quality, maximum upload size |
+
+It is plain ES modules and CSS – no build step and no npm dependencies, so the Pi
+builds it without Node.js. The files in `admin/www/` are compiled into
+`berry-kiosk-admin` as Qt resources: `index.html`, `js/main.js` (shell and hash
+router), `js/api.js` (API client), `js/ui.js` (helpers), one `js/view-*.js` per
+view, `css/base.css` (design tokens) and one CSS file per view. A strict Content
+Security Policy allows no inline scripts or styles. It works on phones and follows
+the system's light or dark mode.
 
 ### Setup
 
@@ -136,21 +158,27 @@ All under `/api`, JSON in and out, errors as `{ "error": "…" }`.
 | `GET` | `/auth/session` | Logged in? Password set? |
 | `POST` | `/auth/login` | `{ "username", "password" }`, sets the session cookie |
 | `POST` | `/auth/logout` | Ends the session |
+| `POST` | `/auth/password` | `{ "current", "new" }`, ends all sessions |
 | `GET` | `/status` | Version, uptime, display, library, storage |
-| `GET` | `/media?album=&offset=&limit=` | Pictures, newest first |
+| `GET` | `/media?album=&q=&enabled=&sort=&order=&offset=&limit=` | Pictures; `q` searches title, location, description and path, `enabled=true\|false`, `sort=added\|taken\|name`, `order=asc\|desc` (default: newest first). Items carry `fileSize` and `version`, which changes with the file (for cache busting) |
 | `GET` | `/media/{id}` | One picture with its metadata |
 | `PATCH` | `/media/{id}` | Edit metadata or `enabled` (written to the sidecar) |
 | `DELETE` | `/media/{id}` | Move to the trash |
 | `GET` | `/media/{id}/thumb` | Thumbnail |
 | `GET` | `/media/{id}/image?kind=1080p\|2160p\|original` | Rendition or original |
 | `POST` | `/media?album=&name=` | Upload, the raw file as body |
-| `GET` | `/albums` | Albums with picture counts |
+| `POST` | `/media/batch` | `{ "ids", "action": "enable"\|"disable"\|"delete"\|"move", "album"? }` → `{ "done", "failed" }` |
+| `GET` | `/albums` | Albums with picture counts and a `cover` `{ id, version }` |
 | `POST` | `/albums` | `{ "name" }`, creates a folder |
+| `PATCH` | `/albums` | `{ "from", "to" }`, renames or moves a folder (409 if `to` exists) |
+| `DELETE` | `/albums?name=` | Moves the folder with its pictures to the trash |
 | `GET` | `/config` | `config.json` |
 | `PUT` | `/config` | Validated; the previous version is kept as `config.json.bak` |
 | `POST` | `/display/next`, `/display/pause`, `/display/resume` | Remote control |
 | `GET` | `/display/screenshot?maxWidth=` | Live screenshot (JPEG) |
 | `POST` | `/library/sync` | Sync the library now |
+
+The web UI itself is served from `/`, `/js/`, `/css/` and `/assets/`.
 
 ## Developing on macOS
 
@@ -179,7 +207,7 @@ build/admin/berry-kiosk-admin --config config.json          # watches media/ and
 build/admin/berry-kiosk-admin --config config.json --once   # sync, render, exit
 ```
 
-Running continuously, it also serves the API and web console on
+Running continuously, it also serves the API and web UI on
 http://localhost:8080. Set a password first:
 
 ```bash
@@ -199,7 +227,7 @@ cd berry-kiosk
 The script builds on the Pi, creates the system user `berry-kiosk`, copies the
 example configuration to `/var/lib/berry-kiosk/config.json` and starts the
 services `berry-kiosk-display` and `berry-kiosk-admin`. On first install it asks
-for the admin password; the web console is then at `http://<pi>.local:8080/`.
+for the admin password; the web UI is then at `http://<pi>.local:8080/`.
 Pictures go into `/var/lib/berry-kiosk/media/` – copied in, or uploaded via the web.
 
 ```bash
@@ -224,7 +252,7 @@ See [`config.example.json`](config.example.json). Top level:
 | `library.database`, `library.cache`, `library.state` | Paths, default `library.db`, `cache`, `state` – e.g. put the cache on a USB drive |
 | `library.trash` | Where deleted pictures are moved, default `trash` |
 | `admin.address` | `"0.0.0.0"` (every interface) or `"127.0.0.1"` (only the device, e.g. behind a reverse proxy) |
-| `admin.port` | Port of the API and web console, default `8080` |
+| `admin.port` | Port of the API and web UI, default `8080` |
 | `admin.maxUploadMB` | Largest upload in MB, default `64` |
 | `quotes` | Global quotes: `[{ "text": "…", "author": "…" }]` or plain strings |
 | `activeLayout` | `id` of the layout to show |
@@ -312,7 +340,8 @@ hides the picture from the slideshow.
 ```
 core/        libberrycore: configuration, render tier, metadata, media library, renditions
 display/     berry-kiosk-display: the Qt Quick display (C++ and QML)
-admin/       berry-kiosk-admin: library sync, renditions, web API and web console
+admin/       berry-kiosk-admin: library sync, renditions and web API
+admin/www/   the web UI (ES modules and CSS, compiled in)
 tests/       unit and API tests
 packaging/   systemd units
 scripts/     install script for the Pi
@@ -325,7 +354,7 @@ docs/        architecture and planning (German)
 2. ✅ **Widgets** – clock, image info (EXIF/IPTC/XMP), quotes (sidecar or global list)
 3. ✅ **Media library** – SQLite index, image pipeline with 1080p/2160p renditions and thumbnails
 4. ✅ **Admin server** – REST API, login, uploads, metadata editing, remote control of the display
-5. **Web UI I** – media library with uploads
+5. ✅ **Web UI I** – media library, uploads, albums and settings; moved files keep their renditions
 6. **Web UI II** – grid editor with live preview on the kiosk, animation settings
 7. **Transitions** – slide, Ken Burns, shader effects with fallbacks for weaker GPUs
 8. **Operations** – schedule, screen off (DPMS/CEC), public profile, read-only root, watchdog, HDMI hotplug

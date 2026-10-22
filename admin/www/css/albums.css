@@ -1,0 +1,61 @@
+/* Albums view (view-albums.js) */
+
+.alb-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.alb-item {
+  --indent: 0px;
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0 10px var(--indent);
+  border-bottom: 1px solid var(--border);
+}
+.alb-item:last-child { border-bottom: 0; }
+
+/* Sub albums are indented by their depth in the folder tree */
+.alb-item[data-depth="1"] { --indent: 20px; }
+.alb-item[data-depth="2"] { --indent: 40px; }
+.alb-item[data-depth="3"] { --indent: 60px; }
+.alb-item[data-depth="4"] { --indent: 80px; }
+.alb-item[data-depth="5"], .alb-item[data-depth="6"] { --indent: 100px; }
+
+.alb-cover img, .alb-cover .thumb-placeholder {
+  display: block;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: var(--radius-small);
+  background: var(--surface-2);
+}
+
+.alb-info {
+  display: grid;
+  min-width: 0;
+}
+.alb-name {
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.alb-name:hover { text-decoration: underline; }
+
+.alb-actions { justify-content: flex-end; }
+.alb-delete:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+
+@media (max-width: 640px) {
+  .alb-item {
+    grid-template-columns: 48px 1fr;
+    padding-left: calc(var(--indent) / 2);
+  }
+  .alb-cover img, .alb-cover .thumb-placeholder { width: 48px; height: 48px; }
+  .alb-actions { grid-column: 1 / -1; justify-content: flex-start; }
+}

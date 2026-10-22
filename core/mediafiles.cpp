@@ -144,4 +144,58 @@ bool moveToTrash(const QString &mediaRoot, const QString &trashRoot, const QStri
     return true;
 }
 
+bool moveFolderToTrash(const QString &mediaRoot, const QString &trashRoot, const QString &folder, QString *error)
+{
+    const auto fail = [error](const QString &message) {
+        if (error)
+            *error = message;
+        return false;
+    };
+
+    const QString root = QDir::cleanPath(mediaRoot);
+    const QString source = QDir::cleanPath(folder);
+    if (source == root || !source.startsWith(root + u'/'))
+        return fail(QStringLiteral("Nur Alben im Bilderordner lassen sich löschen"));
+
+    const QString relative = QDir(root).relativeFilePath(source);
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
+    const QString target = QDir(QDir(trashRoot).filePath(stamp)).filePath(relative);
+    if (!QDir().mkpath(QFileInfo(target).absolutePath()))
+        return fail(QStringLiteral("Papierkorb nicht anlegbar"));
+    const QString unique = uniqueFilePath(QFileInfo(target).absolutePath(), QFileInfo(target).fileName());
+    // Folders cannot be copied by QFile; trash and media live on the same disk by default
+    if (!QDir().rename(source, unique))
+        return fail(QStringLiteral("%1 nicht verschiebbar (anderes Laufwerk als der Papierkorb?)").arg(relative));
+    return true;
+}
+
+QString moveImage(const QString &imagePath, const QString &targetDirectory, QString *error)
+{
+    if (!QDir().mkpath(targetDirectory)) {
+        if (error)
+            *error = QStringLiteral("Album nicht anlegbar");
+        return {};
+    }
+    const QFileInfo info(imagePath);
+    if (QDir::cleanPath(info.absolutePath()) == QDir::cleanPath(targetDirectory))
+        return imagePath; // already there
+
+    const QString target = uniqueFilePath(targetDirectory, info.fileName());
+    const QDateTime modified = info.lastModified();
+    if (!moveFile(imagePath, target)) {
+        if (error)
+            *error = QStringLiteral("%1 nicht verschiebbar").arg(info.fileName());
+        return {};
+    }
+    // A copy across file systems gets a new time; the library matches moves by it
+    QFile moved(target);
+    if (moved.open(QIODevice::ReadWrite))
+        moved.setFileTime(modified, QFileDevice::FileModificationTime);
+
+    const QString sidecar = sidecarPath(imagePath);
+    if (QFileInfo::exists(sidecar))
+        moveFile(sidecar, sidecarPath(target));
+    return target;
+}
+
 } // namespace berry

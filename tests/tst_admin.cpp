@@ -7,6 +7,7 @@
 
 #include <QBuffer>
 #include <QCborMap>
+#include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
@@ -114,6 +115,8 @@ private slots:
     void albumDirectory();
     void uniqueFilePath();
     void moveToTrash();
+    void moveFolderToTrash();
+    void moveImage();
     void updateSidecar();
     void framesRoundtrip();
     void partialFrame();
@@ -397,6 +400,84 @@ void TestAdmin::moveToTrash()
     QVERIFY(!berry::moveToTrash(media, trash, outside, &error));
     QVERIFY(!error.isEmpty());
     QVERIFY(QFileInfo::exists(outside));
+}
+
+void TestAdmin::moveFolderToTrash()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString media = dir.filePath(QStringLiteral("media"));
+    const QString trash = dir.filePath(QStringLiteral("trash"));
+    writeFile(media + QStringLiteral("/reisen/norwegen/fjord.jpg"), "bild");
+    writeFile(media + QStringLiteral("/reisen/norwegen/fjord.json"), "{}");
+    writeFile(media + QStringLiteral("/reisen/notiz.jpg"), "bild");
+    writeFile(media + QStringLiteral("/bleibt.jpg"), "bild");
+
+    QString error;
+    QVERIFY2(berry::moveFolderToTrash(media, trash, media + QStringLiteral("/reisen/norwegen"), &error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(media + QStringLiteral("/reisen/norwegen")));
+    QVERIFY(QFileInfo::exists(media + QStringLiteral("/reisen/notiz.jpg")));
+
+    // trash/<stamp>/reisen/norwegen/… keeps the folder structure
+    const QStringList stamps = QDir(trash).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    QCOMPARE(stamps.size(), 1);
+    const QDir stamp(QDir(trash).filePath(stamps.constFirst()));
+    QVERIFY(QFileInfo::exists(stamp.filePath(QStringLiteral("reisen/norwegen/fjord.jpg"))));
+    QVERIFY(QFileInfo::exists(stamp.filePath(QStringLiteral("reisen/norwegen/fjord.json"))));
+
+    // Never the media root itself, nothing outside of it
+    QVERIFY(!berry::moveFolderToTrash(media, trash, media, &error));
+    QVERIFY(!berry::moveFolderToTrash(media, trash, media + QStringLiteral("/"), &error));
+    QVERIFY(QFileInfo::exists(media + QStringLiteral("/bleibt.jpg")));
+    writeFile(dir.filePath(QStringLiteral("anderswo/x.jpg")), "bild");
+    error.clear();
+    QVERIFY(!berry::moveFolderToTrash(media, trash, dir.filePath(QStringLiteral("anderswo")), &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(QFileInfo::exists(dir.filePath(QStringLiteral("anderswo/x.jpg"))));
+    QVERIFY(!berry::moveFolderToTrash(media, trash, media + QStringLiteral("/../anderswo"), &error));
+    QVERIFY(QFileInfo::exists(dir.filePath(QStringLiteral("anderswo/x.jpg"))));
+}
+
+void TestAdmin::moveImage()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString media = dir.filePath(QStringLiteral("media"));
+    const QString image = media + QStringLiteral("/alpen/elch.jpg");
+    writeFile(image, "bild");
+    writeFile(media + QStringLiteral("/alpen/elch.json"), R"({ "title": "Elch" })");
+    const QDateTime modified = QDateTime::currentDateTime().addDays(-3);
+    {
+        QFile file(image);
+        QVERIFY(file.open(QIODevice::ReadWrite));
+        QVERIFY(file.setFileTime(modified, QFileDevice::FileModificationTime));
+    }
+
+    QString error;
+    const QString moved = berry::moveImage(image, media + QStringLiteral("/wald/neu"), &error);
+    QCOMPARE(moved, media + QStringLiteral("/wald/neu/elch.jpg"));
+    QVERIFY(!QFileInfo::exists(image));
+    QVERIFY(!QFileInfo::exists(media + QStringLiteral("/alpen/elch.json")));
+    QCOMPARE(readJson(media + QStringLiteral("/wald/neu/elch.json")).value(u"title").toString(), QStringLiteral("Elch"));
+    // The library recognises moves by name, size and modification time
+    QCOMPARE(QFileInfo(moved).lastModified().toSecsSinceEpoch(), modified.toSecsSinceEpoch());
+
+    // Already there: nothing happens
+    QCOMPARE(berry::moveImage(moved, media + QStringLiteral("/wald/neu"), &error), moved);
+    QVERIFY(QFileInfo::exists(moved));
+
+    // A name that is taken gets a suffix, the sidecar follows the new name
+    writeFile(media + QStringLiteral("/alpen/elch.jpg"), "anderer elch");
+    writeFile(media + QStringLiteral("/alpen/elch.json"), R"({ "title": "Zweiter Elch" })");
+    const QString second = berry::moveImage(media + QStringLiteral("/alpen/elch.jpg"), media + QStringLiteral("/wald/neu"), &error);
+    QCOMPARE(second, media + QStringLiteral("/wald/neu/elch (2).jpg"));
+    QCOMPARE(readJson(media + QStringLiteral("/wald/neu/elch (2).json")).value(u"title").toString(), QStringLiteral("Zweiter Elch"));
+    QCOMPARE(readJson(media + QStringLiteral("/wald/neu/elch.json")).value(u"title").toString(), QStringLiteral("Elch"));
+
+    // A missing file is an error, not a crash
+    error.clear();
+    QVERIFY(berry::moveImage(media + QStringLiteral("/gibt-es-nicht.jpg"), media + QStringLiteral("/wald"), &error).isEmpty());
+    QVERIFY(!error.isEmpty());
 }
 
 void TestAdmin::updateSidecar()

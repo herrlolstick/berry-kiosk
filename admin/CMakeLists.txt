@@ -11,13 +11,13 @@ target_include_directories(berryadmin PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(berryadmin PUBLIC BERRY_KIOSK_VERSION="${PROJECT_VERSION}")
 target_link_libraries(berryadmin PUBLIC berrycore Qt6::Core Qt6::Gui Qt6::Network Qt6::HttpServer)
 
-# The web UI is compiled in, so there is nothing to install or to get out of sync
+# The web UI is compiled in, so there is nothing to install or to get out of
+# sync. Plain ES modules, no build step: the Pi needs no Node.js.
+file(GLOB_RECURSE berry_www_files RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} CONFIGURE_DEPENDS
+    www/*.html www/*.js www/*.css www/*.svg www/*.png)
 qt_add_resources(berryadmin "www"
     PREFIX "/"
-    FILES
-        www/index.html
-        www/app.js
-        www/app.css
+    FILES ${berry_www_files}
 )
 
 qt_add_executable(berry-kiosk-admin main.cpp)
