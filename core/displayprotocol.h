@@ -13,7 +13,8 @@ namespace berry {
 //   request   { id, command, ...arguments }
 //   response  { id, ok, error?, ...result }
 //   event     { event, ... }            sent by the display on its own
-// Commands: status, next, pause, resume, screenshot { maxWidth }
+// Commands: status, next, pause, resume, screenshot { maxWidth },
+//           preview { layout, seconds }, endPreview
 // Events:   shown { region, path }
 
 // A path in the state directory, or a short name in the temp directory where

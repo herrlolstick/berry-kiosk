@@ -1,0 +1,228 @@
+/* Layouts view (view-layouts.js, layout-editor.js, layout-quotes.js) */
+
+.lay-tabs { display: flex; gap: 4px; }
+.lay-restored { margin-bottom: var(--gap); }
+
+.lay-main {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: var(--gap);
+  align-items: start;
+  padding-bottom: 80px; /* room for the sticky footer */
+}
+@media (max-width: 980px) {
+  .lay-main { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* Layout list */
+
+.lay-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.lay-list-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-small);
+}
+.lay-list-item.selected { border-color: var(--accent); background: var(--accent-soft); }
+.lay-list-select {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  min-height: 0;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  white-space: normal;
+}
+.lay-list-select:hover:not(:disabled) { background: transparent; }
+.lay-list-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 4px; }
+
+/* Editor */
+
+.lay-editor { display: grid; gap: 12px; }
+.lay-toolbar {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.lay-grid-input { width: 64px; min-height: 28px; padding: 2px 6px; }
+
+.lay-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: var(--gap);
+  align-items: start;
+}
+@media (max-width: 1180px) {
+  .lay-workspace { grid-template-columns: minmax(0, 1fr); }
+}
+
+.lay-stage {
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: #0c0d0c;
+  border-radius: var(--radius);
+}
+
+/* The canvas keeps the kiosk's aspect ratio; the grid is drawn as lines */
+.lay-canvas {
+  position: relative;
+  width: min(100%, calc(70vh * var(--lay-aspect, 1.7778)));
+  background-color: #000;
+  background-image:
+    linear-gradient(to right, rgb(255 255 255 / 9%) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 9%) 1px, transparent 1px);
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+.lay-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.lay-box {
+  position: absolute;
+  display: grid;
+  border: 1px solid rgb(255 255 255 / 35%);
+  border-radius: 4px;
+  background: rgb(63 125 78 / 35%);
+  color: #fff;
+  cursor: grab;
+  overflow: hidden;
+}
+.lay-box[data-type="clock"],
+.lay-box[data-type="imageInfo"],
+.lay-box[data-type="quote"] {
+  background: rgb(20 20 20 / 55%);
+  border-style: dashed;
+}
+.lay-box.selected { border: 2px solid var(--accent); box-shadow: 0 0 0 2px rgb(108 176 126 / 35%); overflow: visible; }
+.lay-box.dragging { cursor: grabbing; opacity: .85; }
+
+.lay-box-content {
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 2px;
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  overflow: hidden;
+  pointer-events: none;
+  text-align: center;
+  font-size: clamp(.6rem, 1.4vw, .95rem);
+  text-shadow: 0 1px 2px rgb(0 0 0 / 70%);
+}
+.lay-box-content[data-align="left"] { justify-items: start; text-align: left; }
+.lay-box-content[data-align="right"] { justify-items: end; text-align: right; }
+.lay-box-content img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: .75;
+}
+.lay-box-content img.contain { object-fit: contain; }
+.lay-clock-time { font-size: 1.6em; font-weight: 300; }
+.lay-box-text { opacity: .85; }
+
+.lay-box-label {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  max-width: calc(100% - 8px);
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgb(0 0 0 / 60%);
+  font-size: .7rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+/* Resize handles, only on the selected box */
+.lay-handle {
+  position: absolute;
+  display: none;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  touch-action: none;
+}
+.lay-box.selected .lay-handle { display: block; }
+.lay-handle-n { left: 50%; top: 0; cursor: ns-resize; }
+.lay-handle-s { left: 50%; top: 100%; cursor: ns-resize; }
+.lay-handle-e { left: 100%; top: 50%; cursor: ew-resize; }
+.lay-handle-w { left: 0; top: 50%; cursor: ew-resize; }
+.lay-handle-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.lay-handle-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.lay-handle-nw { left: 0; top: 0; cursor: nwse-resize; }
+.lay-handle-se { left: 100%; top: 100%; cursor: nwse-resize; }
+@media (pointer: coarse) {
+  .lay-handle { width: 22px; height: 22px; margin: -11px 0 0 -11px; }
+}
+
+/* Properties panel */
+
+.lay-panel { display: grid; gap: 10px; }
+.lay-panel h2 { margin: 0; }
+.lay-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-items: end; }
+.lay-fields.four { grid-template-columns: repeat(4, 1fr); }
+.lay-checks {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+}
+.lay-checks legend { padding: 0 4px; color: var(--muted); font-size: .9rem; }
+.lay-style { display: grid; gap: 8px; }
+.lay-style summary { cursor: pointer; font-weight: 600; margin-bottom: 8px; }
+.lay-style[open] { display: grid; gap: 8px; }
+
+/* Footer with save actions, always reachable */
+.lay-footer {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: var(--gap);
+  padding: 10px 14px;
+}
+.lay-dirty { color: var(--warning); font-weight: 600; }
+
+/* Quotes */
+
+.lay-quotes { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.lay-quote {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.lay-quote:last-child { border-bottom: 0; }
+.lay-quote-actions { display: flex; flex-direction: column; gap: 4px; }
+@media (max-width: 560px) {
+  .lay-quote { grid-template-columns: 1fr; }
+  .lay-quote-actions { flex-direction: row; }
+}
+
+.lay-shot { display: block; width: 100%; border-radius: var(--radius-small); background: #000; }
+.lay-problems { margin: 0; padding-left: 20px; }

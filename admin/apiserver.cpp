@@ -355,6 +355,16 @@ void ApiServer::addRoutes()
             return displayCommand(name);
         });
     }
+    m_http.route(QStringLiteral("/api/display/preview"), Method::Post, [this](const QHttpServerRequest &request) {
+        if (auto denied = checkAccess(request, true))
+            return std::move(*denied);
+        return previewLayout(request);
+    });
+    m_http.route(QStringLiteral("/api/display/preview"), Method::Delete, [this](const QHttpServerRequest &request) {
+        if (auto denied = checkAccess(request, true))
+            return std::move(*denied);
+        return displayCommand(QStringLiteral("endPreview"));
+    });
     m_http.route(QStringLiteral("/api/display/screenshot"), Method::Get, [this](const QHttpServerRequest &request) {
         if (auto denied = checkAccess(request, false))
             return std::move(*denied);
@@ -444,6 +454,7 @@ QHttpServerResponse ApiServer::status()
         if (!reply.isEmpty()) {
             display.insert(QStringLiteral("paused"), reply.value(QStringLiteral("paused")).toBool());
             display.insert(QStringLiteral("layout"), reply.value(QStringLiteral("layout")).toString());
+            display.insert(QStringLiteral("previewing"), reply.value(QStringLiteral("previewing")).toBool());
         }
         // Map the originals the display reports to library ids, for thumbnails
         QJsonArray showing;
@@ -858,5 +869,25 @@ QHttpServerResponse ApiServer::deleteAlbum(const QHttpServerRequest &request)
         return fail(Status::InternalServerError, error);
     qInfo().noquote() << "Album in den Papierkorb:" << QDir(root).relativeFilePath(folder);
     emit syncRequested();
+    return empty();
+}
+
+QHttpServerResponse ApiServer::previewLayout(const QHttpServerRequest &request)
+{
+    const auto body = jsonBody(request);
+    if (!body || !body->value(u"layout").isObject())
+        return fail(Status::BadRequest, QStringLiteral("JSON mit layout erwartet"));
+    const QJsonObject layout = body->value(u"layout").toObject();
+    // Same checks as for saving, the display must be able to show it
+    if (const QString error = validateConfig(QJsonObject{{QStringLiteral("layouts"), QJsonArray{layout}}}); !error.isEmpty())
+        return fail(Status::BadRequest, error);
+
+    const int seconds = qBound(1, body->value(u"seconds").toInt(60), 600);
+    QString error;
+    const QCborMap reply = m_display->request(
+        QStringLiteral("preview"),
+        {{QStringLiteral("layout"), QCborMap::fromJsonObject(layout)}, {QStringLiteral("seconds"), seconds}}, 3000, &error);
+    if (reply.isEmpty())
+        return fail(Status::ServiceUnavailable, error);
     return empty();
 }

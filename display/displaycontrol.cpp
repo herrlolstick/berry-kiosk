@@ -23,7 +23,7 @@ DisplayControl::DisplayControl(KioskController *kiosk, QObject *parent)
                    {QStringLiteral("region"), region},
                    {QStringLiteral("path"), path}});
     });
-    connect(m_kiosk, &KioskController::configChanged, this, [this] { m_shown.clear(); });
+    connect(m_kiosk, &KioskController::layoutChanged, this, [this] { m_shown.clear(); });
 }
 
 void DisplayControl::setWindow(QQuickWindow *window)
@@ -88,6 +88,7 @@ QCborMap DisplayControl::handle(const QCborMap &request)
             {QStringLiteral("ok"), true},
             {QStringLiteral("paused"), m_kiosk->paused()},
             {QStringLiteral("layout"), m_kiosk->layoutId()},
+            {QStringLiteral("previewing"), m_kiosk->previewing()},
             {QStringLiteral("renderTier"), m_kiosk->renderTier()},
             {QStringLiteral("shown"), shown},
         };
@@ -102,6 +103,17 @@ QCborMap DisplayControl::handle(const QCborMap &request)
     }
     if (command == u"screenshot")
         return screenshot(request);
+    if (command == u"preview") {
+        const QCborMap layout = request.value(QStringLiteral("layout")).toMap();
+        if (layout.isEmpty())
+            return {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("kein Layout")}};
+        m_kiosk->previewLayout(layout.toVariantMap(), int(request.value(QStringLiteral("seconds")).toInteger(60)));
+        return ok;
+    }
+    if (command == u"endPreview") {
+        m_kiosk->endPreview();
+        return ok;
+    }
 
     return {{QStringLiteral("ok"), false}, {QStringLiteral("error"), QStringLiteral("unbekannter Befehl: %1").arg(command)}};
 }

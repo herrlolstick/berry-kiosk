@@ -140,6 +140,16 @@ AdminSettings Config::admin() const
     return settings;
 }
 
+QJsonObject Config::layoutById(const QString &id) const
+{
+    for (const QJsonValue &value : m_json.value(u"layouts").toArray()) {
+        const QJsonObject layout = value.toObject();
+        if (!id.isEmpty() && layout.value(u"id").toString() == id)
+            return layout;
+    }
+    return {};
+}
+
 QString Config::locale() const
 {
     const QString locale = m_json.value(u"locale").toString().trimmed();

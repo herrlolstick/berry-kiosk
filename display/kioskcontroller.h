@@ -19,7 +19,8 @@ class KioskController : public QObject
     QML_ELEMENT
     QML_UNCREATABLE("KioskController is provided by the application")
 
-    Q_PROPERTY(QVariantMap layout READ layout NOTIFY configChanged)
+    Q_PROPERTY(QVariantMap layout READ layout NOTIFY layoutChanged)
+    Q_PROPERTY(bool previewing READ previewing NOTIFY layoutChanged)
     Q_PROPERTY(QString mediaRoot READ mediaRoot NOTIFY configChanged)
     Q_PROPERTY(QString libraryDatabase READ libraryDatabase NOTIFY configChanged)
     Q_PROPERTY(QString cacheRoot READ cacheRoot NOTIFY configChanged)
@@ -68,6 +69,13 @@ public:
     bool paused() const { return m_paused; }
     void setPaused(bool paused);
     QString layoutId() const { return m_layout.value(QStringLiteral("id")).toString(); }
+    bool previewing() const { return !m_previewLayout.isEmpty(); }
+
+    // Shows a layout for a while without saving it (layout editor's preview)
+    void previewLayout(const QVariantMap &layout, int seconds);
+    void endPreview();
+    // Layout the schedule asks for; empty = the configured active layout
+    void setScheduledLayout(const QString &id);
 
     // Remote control from the admin service
     void requestNext() { emit nextRequested(); }
@@ -76,6 +84,7 @@ public:
 
 signals:
     void configChanged();
+    void layoutChanged();
     void renderChanged();
     void pausedChanged();
     void nextRequested();
@@ -86,11 +95,16 @@ private:
     void updateRender();
     void watchConfigFile();
     void writeDisplayState();
+    // Preview before schedule before the configured active layout
+    void updateLayout();
 
     Options m_options;
     berry::Config m_config;
     bool m_configLoaded = false;
     QVariantMap m_layout;
+    QVariantMap m_previewLayout;
+    QTimer m_previewTimer;
+    QString m_scheduledLayout;
     berry::RenderDecision m_render;
     bool m_renderDecided = false;
     bool m_paused = false;

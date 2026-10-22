@@ -14,6 +14,7 @@ const routes = {
   mediathek: { label: 'Mediathek', load: () => import('./view-library.js') },
   hochladen: { label: 'Hochladen', load: () => import('./view-upload.js') },
   alben: { label: 'Alben', load: () => import('./view-albums.js') },
+  layouts: { label: 'Layouts', load: () => import('./view-layouts.js') },
   einstellungen: { label: 'Einstellungen', load: () => import('./view-settings.js') },
 };
 

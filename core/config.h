@@ -47,6 +47,7 @@ public:
     LibrarySettings library() const; // paths resolve like mediaRoot
     AdminSettings admin() const;
     QJsonObject activeLayout() const; // falls back to one full-screen slideshow
+    QJsonObject layoutById(const QString &id) const; // empty when there is none
     QString locale() const;           // for dates and numbers, e.g. "de_DE"
     QJsonArray quotes() const;        // [{ "text", "author" }], plain strings are accepted too
 

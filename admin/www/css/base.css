@@ -183,6 +183,8 @@ button.primary:hover:not(:disabled) { background: var(--accent); filter: brightn
 button.danger { background: var(--danger); border-color: var(--danger); color: var(--danger-text); }
 button.danger:hover:not(:disabled) { background: var(--danger); filter: brightness(1.08); }
 button.secondary { background: transparent; }
+button.danger.secondary { background: transparent; color: var(--danger); }
+button.danger.secondary:hover:not(:disabled) { background: var(--surface-2); filter: none; }
 button.small { min-height: 28px; padding: 0 10px; font-size: .85rem; }
 .icon-button { min-width: 36px; padding: 0 8px; background: transparent; }
 

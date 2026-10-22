@@ -21,10 +21,53 @@ KioskController::KioskController(const Options &options, QObject *parent)
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, &m_reloadTimer, qOverload<>(&QTimer::start));
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, &m_reloadTimer, qOverload<>(&QTimer::start));
 
+    m_previewTimer.setSingleShot(true);
+    connect(&m_previewTimer, &QTimer::timeout, this, &KioskController::endPreview);
+
     if (QScreen *screen = QGuiApplication::primaryScreen())
         connect(screen, &QScreen::geometryChanged, this, &KioskController::updateRender);
 
     reloadConfig();
+}
+
+void KioskController::previewLayout(const QVariantMap &layout, int seconds)
+{
+    m_previewLayout = layout;
+    if (!m_previewLayout.contains(QStringLiteral("id")))
+        m_previewLayout.insert(QStringLiteral("id"), QStringLiteral("vorschau"));
+    m_previewTimer.start(qBound(1, seconds, 600) * 1000);
+    qInfo().noquote() << "Vorschau für" << qBound(1, seconds, 600) << "s:" << m_previewLayout.value(QStringLiteral("id")).toString();
+    updateLayout();
+}
+
+void KioskController::endPreview()
+{
+    m_previewTimer.stop();
+    if (m_previewLayout.isEmpty())
+        return;
+    m_previewLayout.clear();
+    updateLayout();
+}
+
+void KioskController::setScheduledLayout(const QString &id)
+{
+    if (m_scheduledLayout == id)
+        return;
+    m_scheduledLayout = id;
+    updateLayout();
+}
+
+void KioskController::updateLayout()
+{
+    QVariantMap layout = m_previewLayout;
+    if (layout.isEmpty() && !m_scheduledLayout.isEmpty())
+        layout = m_config.layoutById(m_scheduledLayout).toVariantMap();
+    if (layout.isEmpty())
+        layout = m_config.activeLayout().toVariantMap();
+    if (layout == m_layout)
+        return;
+    m_layout = layout;
+    emit layoutChanged();
 }
 
 void KioskController::setPaused(bool paused)
@@ -58,7 +101,6 @@ void KioskController::reloadConfig()
     const bool modeChanged = m_configLoaded && config.display().maxRender != m_config.display().maxRender;
     m_config = config;
     m_configLoaded = true;
-    m_layout = m_config.activeLayout().toVariantMap();
 
     if (modeChanged && m_options.restartOnModeChange) {
         qInfo() << "maxRender geändert, Neustart für den neuen Bildschirmmodus";
@@ -67,6 +109,7 @@ void KioskController::reloadConfig()
     }
 
     emit configChanged();
+    updateLayout();
     updateRender();
     writeDisplayState(); // the state directory may have moved
 }

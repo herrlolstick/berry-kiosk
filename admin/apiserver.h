@@ -65,6 +65,7 @@ private:
     QHttpServerResponse putConfig(const QHttpServerRequest &request);
     QHttpServerResponse displayCommand(const QString &command);
     QHttpServerResponse screenshot(const QHttpServerRequest &request);
+    QHttpServerResponse previewLayout(const QHttpServerRequest &request);
 
     QString m_configPath;
     DisplayLink *m_display;
