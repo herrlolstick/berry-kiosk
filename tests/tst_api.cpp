@@ -11,6 +11,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QImage>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -18,6 +19,9 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QSignalSpy>
+#include <QNetworkCookie>
+#include <QNetworkCookieJar>
+#include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -187,6 +191,81 @@ qint64 idOf(const QJsonArray &items, const QString &path)
     return 0;
 }
 
+// Plain HTTP over a socket, so the Host header is exactly what we say. Waits
+// with the event loop running: the server lives in this thread.
+int rawStatus(quint16 port, const QByteArray &method, const QByteArray &target, const QByteArray &host,
+              const QList<QByteArray> &headers = {}, const QByteArray &body = {})
+{
+    QTcpSocket socket;
+    QByteArray reply;
+    QObject::connect(&socket, &QTcpSocket::readyRead, [&] { reply += socket.readAll(); });
+    socket.connectToHost(QHostAddress::LocalHost, port);
+    if (!QTest::qWaitFor([&] { return socket.state() == QAbstractSocket::ConnectedState; }, 5000))
+        return -1;
+
+    QByteArray request = method + ' ' + target + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n";
+    for (const QByteArray &header : headers)
+        request += header + "\r\n";
+    if (method != "GET")
+        request += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
+    request += "\r\n" + body;
+    socket.write(request);
+
+    if (!QTest::qWaitFor([&] { return reply.contains("\r\n"); }, 5000))
+        return -1;
+    // "HTTP/1.1 403 Forbidden"
+    return reply.left(reply.indexOf("\r\n")).split(' ').value(1).toInt();
+}
+
+QByteArray sessionCookie(QNetworkAccessManager &nam, quint16 port)
+{
+    for (const QNetworkCookie &cookie : nam.cookieJar()->cookiesForUrl(QUrl(QStringLiteral("http://127.0.0.1:%1/").arg(port)))) {
+        if (cookie.name() == "berry_session")
+            return "Cookie: berry_session=" + cookie.value();
+    }
+    return {};
+}
+
+quint32 crc32(const QByteArray &data)
+{
+    quint32 crc = 0xffffffffu;
+    for (const char byte : data) {
+        crc ^= quint8(byte);
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+
+QByteArray pngChunk(const QByteArray &type, const QByteArray &data)
+{
+    QByteArray chunk;
+    const auto be32 = [&chunk](quint32 value) {
+        for (int shift = 24; shift >= 0; shift -= 8)
+            chunk.append(char((value >> shift) & 0xff));
+    };
+    be32(quint32(data.size()));
+    chunk += type + data;
+    be32(crc32(type + data));
+    return chunk;
+}
+
+// A few dozen bytes that claim width × height pixels: a decompression bomb's header
+QByteArray pngHeaderOnly(quint32 width, quint32 height)
+{
+    QByteArray header;
+    for (const quint32 value : {width, height}) {
+        for (int shift = 24; shift >= 0; shift -= 8)
+            header.append(char((value >> shift) & 0xff));
+    }
+    header += QByteArray::fromHex("0802000000"); // 8 bit RGB, no interlace
+    // libpng reads up to the first IDAT before it reports the size; a tiny
+    // zlib stream (qCompress minus its length prefix) is enough for that
+    const QByteArray idat = qCompress(QByteArray(16, '\0')).mid(4);
+    return QByteArray::fromHex("89504e470d0a1a0a") + pngChunk("IHDR", header) + pngChunk("IDAT", idat)
+        + pngChunk("IEND", {});
+}
+
 } // namespace
 
 class TestApi : public QObject
@@ -217,6 +296,13 @@ private slots:
     void renameAlbum();
     void deleteAlbum();
     void changePassword();
+    void hostHeader();
+    void loginNeedsCsrfHeader();
+    void changePasswordThrottle();
+    void imageKindAllowlist();
+    void configPathsLocked();
+    void uploadPixelLimit();
+    void credentialsFixedLocation();
 };
 
 void TestApi::initTestCase()
@@ -995,6 +1081,246 @@ void TestApi::changePassword()
     QCOMPARE(env->request("POST", QStringLiteral("/api/auth/logout")).status, 204);
     QCOMPARE(change(QStringLiteral("neuesPasswort"), QStringLiteral("nochEinPasswort")).status, 401);
     QVERIFY(env->login(QStringLiteral("neuesPasswort")));
+}
+
+void TestApi::hostHeader()
+{
+    const auto env = makeEnv({{QStringLiteral("admin"),
+                               QJsonObject{{QStringLiteral("allowedHosts"), QJsonArray{QStringLiteral("kiosk.example")}}}}});
+    QVERIFY(env);
+    QVERIFY(env->login());
+    const quint16 port = env->server->serverPort();
+    const QByteArray cookie = sessionCookie(env->nam, port);
+    QVERIFY(!cookie.isEmpty());
+    const QByteArray self = "127.0.0.1:" + QByteArray::number(port);
+
+    // DNS rebinding: a foreign page's name as Host is refused everywhere
+    QCOMPARE(rawStatus(port, "GET", "/api/auth/session", "evil.example"), 403);
+    QCOMPARE(rawStatus(port, "GET", "/api/status", "evil.example", {cookie}), 403);
+    QCOMPARE(rawStatus(port, "GET", "/api/status", "kiosk.example.evil.example", {cookie}), 403);
+    const QByteArray login = jsonBytes({{QStringLiteral("username"), QStringLiteral("admin")},
+                                        {QStringLiteral("password"), QStringLiteral("geheim123")}});
+    QCOMPARE(rawStatus(port, "POST", "/api/auth/login", "evil.example",
+                       {"X-Berry-Kiosk: 1", "Content-Type: application/json"}, login),
+             403);
+
+    // IP addresses, localhost and configured names are fine
+    QCOMPARE(rawStatus(port, "GET", "/api/auth/session", self), 200);
+    QCOMPARE(rawStatus(port, "GET", "/api/status", self, {cookie}), 200);
+    QCOMPARE(rawStatus(port, "GET", "/api/status", "localhost:" + QByteArray::number(port), {cookie}), 200);
+    QCOMPARE(rawStatus(port, "GET", "/api/status", "[::1]:" + QByteArray::number(port), {cookie}), 200);
+    QCOMPARE(rawStatus(port, "GET", "/api/status", "kiosk.example", {cookie}), 200);
+    QCOMPARE(rawStatus(port, "GET", "/api/status", "KIOSK.Example.:8080", {cookie}), 200);
+    QCOMPARE(rawStatus(port, "POST", "/api/auth/login", "kiosk.example",
+                       {"X-Berry-Kiosk: 1", "Content-Type: application/json"}, login),
+             200);
+}
+
+void TestApi::loginNeedsCsrfHeader()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    const auto attempt = [&](const QString &password, bool csrf, const QList<QPair<QByteArray, QByteArray>> &extra = {}) {
+        QList<QPair<QByteArray, QByteArray>> headers{{"Content-Type", "application/json"}};
+        headers += extra;
+        return env->request("POST", QStringLiteral("/api/auth/login"),
+                            jsonBytes({{QStringLiteral("username"), QStringLiteral("admin")},
+                                       {QStringLiteral("password"), password}}),
+                            headers, csrf)
+            .status;
+    };
+
+    // Cross-site form posts never reach the password check, so they cannot
+    // use up the address's attempts and lock the admin out
+    for (int i = 0; i < 6; ++i)
+        QCOMPARE(attempt(QStringLiteral("falsch"), false), 403);
+    QCOMPARE(attempt(QStringLiteral("geheim123"), false), 403);
+    QCOMPARE(attempt(QStringLiteral("geheim123"), true, {{"Origin", "http://evil.example"}}), 403);
+    QCOMPARE(env->get(QStringLiteral("/api/status")).status, 401);
+    QVERIFY(env->login());
+}
+
+void TestApi::changePasswordThrottle()
+{
+    const auto change = [](Env &env, const QString &current) {
+        return env.request("POST", QStringLiteral("/api/auth/password"),
+                           jsonBytes({{QStringLiteral("current"), current}, {QStringLiteral("new"), QStringLiteral("neuesPasswort")}}),
+                           {{"Content-Type", "application/json"}})
+            .status;
+    };
+
+    // Guessing the current password is braked like the login
+    {
+        const auto env = makeEnv();
+        QVERIFY(env);
+        QVERIFY(env->login());
+        for (int i = 0; i < 5; ++i)
+            QCOMPARE(change(*env, QStringLiteral("falsch")), 403);
+        QCOMPARE(change(*env, QStringLiteral("falsch")), 429);
+        QCOMPARE(change(*env, QStringLiteral("geheim123")), 429); // even the right one has to wait
+        QVERIFY(!env->login());
+    }
+
+    // A correct change clears the address's failures
+    {
+        const auto env = makeEnv();
+        QVERIFY(env);
+        QVERIFY(env->login());
+        for (int i = 0; i < 4; ++i)
+            QCOMPARE(change(*env, QStringLiteral("falsch")), 403);
+        QCOMPARE(change(*env, QStringLiteral("geheim123")), 204);
+        QVERIFY(env->login(QStringLiteral("neuesPasswort")));
+        // Without the reset these would be failures 5 to 8: the 6th total gets 429
+        for (int i = 0; i < 4; ++i)
+            QCOMPARE(change(*env, QStringLiteral("falsch")), 403);
+    }
+}
+
+void TestApi::imageKindAllowlist()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    QVERIFY(env->login());
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?name=a.jpg"), jpegBytes(), {{"Content-Type", "image/jpeg"}}).status, 201);
+    env->sync();
+    const qint64 id = idOf(env->get(QStringLiteral("/api/media")).object().value(u"items").toArray(), QStringLiteral("a.jpg"));
+    QVERIFY(id > 0);
+    const auto image = [&](const QString &kind) {
+        return env->get(QStringLiteral("/api/media/%1/image?kind=%2").arg(id).arg(kind)).status;
+    };
+
+    QCOMPARE(image(QStringLiteral("..%2F..%2Fx")), 400);
+    QCOMPARE(image(QStringLiteral("..%2F..%2F..%2Fetc")), 400);
+    QCOMPARE(image(QStringLiteral("%2Fetc")), 400);
+    QCOMPARE(image(QStringLiteral("foo")), 400);
+    // Known kinds pass the check (not rendered yet: 404), the original is there
+    QCOMPARE(image(QStringLiteral("thumb")), 404);
+    QCOMPARE(image(QStringLiteral("1080p")), 404);
+    QCOMPARE(image(QStringLiteral("2160p")), 404);
+    QCOMPARE(image(QStringLiteral("original")), 200);
+    QCOMPARE(env->get(QStringLiteral("/api/media/%1/image").arg(id)).status, 200);
+}
+
+void TestApi::configPathsLocked()
+{
+    const QJsonObject library{
+        {QStringLiteral("database"), QStringLiteral("library.db")},
+        {QStringLiteral("cache"), QStringLiteral("cache")},
+        {QStringLiteral("state"), QStringLiteral("state")},
+        {QStringLiteral("trash"), QStringLiteral("trash")},
+    };
+    const auto env = makeEnv({{QStringLiteral("library"), library}});
+    QVERIFY(env);
+    QVERIFY(env->login());
+
+    const auto fileBytes = [&] {
+        QFile file(env->configPath);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    };
+    const auto put = [&](const QJsonObject &config) {
+        return env->request("PUT", QStringLiteral("/api/config"), jsonBytes(config), {{"Content-Type", "application/json"}});
+    };
+    const QJsonObject original = readJsonFile(env->configPath);
+    const QByteArray before = fileBytes();
+
+    // Where data lives can only be changed on the device itself
+    const auto changed = [&](const QString &section, const QString &key, const QJsonValue &value) {
+        QJsonObject config = original;
+        QJsonObject part = config.value(section).toObject();
+        part.insert(key, value);
+        config.insert(section, part);
+        return config;
+    };
+    for (const auto &[section, key, value] : {
+             std::tuple{QStringLiteral("media"), QStringLiteral("path"), QStringLiteral("/")},
+             std::tuple{QStringLiteral("library"), QStringLiteral("state"), QStringLiteral("/tmp/anderswo")},
+             std::tuple{QStringLiteral("library"), QStringLiteral("cache"), QStringLiteral("..")},
+             std::tuple{QStringLiteral("library"), QStringLiteral("database"), QStringLiteral("/tmp/x.db")},
+             std::tuple{QStringLiteral("library"), QStringLiteral("trash"), QStringLiteral("/")},
+         }) {
+        const Response response = put(changed(section, key, value));
+        QCOMPARE(response.status, 400);
+        QVERIFY(response.object().value(u"error").toString().contains(QStringLiteral("%1.%2").arg(section, key)));
+        QCOMPARE(fileBytes(), before);
+    }
+
+    // Leaving the keys out keeps the values on disk
+    QCOMPARE(put(QJsonObject{{QStringLiteral("locale"), QStringLiteral("en_GB")}}).status, 204);
+    QJsonObject written = readJsonFile(env->configPath);
+    QCOMPARE(written.value(u"locale").toString(), QStringLiteral("en_GB"));
+    QCOMPARE(written.value(u"media").toObject().value(u"path").toString(), QStringLiteral("media"));
+    QCOMPARE(written.value(u"library").toObject(), library);
+
+    // A library object with only some keys gets the others back as well
+    QCOMPARE(put(QJsonObject{{QStringLiteral("library"), QJsonObject{{QStringLiteral("jpegQuality"), 90}}}}).status, 204);
+    written = readJsonFile(env->configPath);
+    QCOMPARE(written.value(u"library").toObject().value(u"state").toString(), QStringLiteral("state"));
+    QCOMPARE(written.value(u"library").toObject().value(u"jpegQuality").toInt(), 90);
+    QCOMPARE(written.value(u"media").toObject().value(u"path").toString(), QStringLiteral("media"));
+
+    // The same values are fine
+    QJsonObject same = original;
+    same.insert(QStringLiteral("quotes"), QJsonArray{QStringLiteral("Ein Zitat")});
+    QCOMPARE(put(same).status, 204);
+
+    // Adding a path the file does not set yet is a change too
+    const auto plain = makeEnv();
+    QVERIFY(plain);
+    QVERIFY(plain->login());
+    QCOMPARE(plain->request("PUT", QStringLiteral("/api/config"),
+                            jsonBytes({{QStringLiteral("library"), QJsonObject{{QStringLiteral("cache"), QStringLiteral("/tmp")}}}}),
+                            {{"Content-Type", "application/json"}})
+                 .status,
+             400);
+}
+
+void TestApi::uploadPixelLimit()
+{
+    const auto env = makeEnv();
+    QVERIFY(env);
+    QVERIFY(env->login());
+
+    // Sanity: the crafted header really reads as a 20000 × 20000 PNG
+    QByteArray bomb = pngHeaderOnly(20000, 20000);
+    QBuffer buffer(&bomb);
+    QVERIFY(buffer.open(QIODevice::ReadOnly));
+    QCOMPARE(QImageReader::imageFormat(&buffer), QByteArray("png"));
+    buffer.seek(0);
+    QCOMPARE(QImageReader(&buffer, "png").size(), QSize(20000, 20000));
+
+    const Response refused = env->request("POST", QStringLiteral("/api/media?name=bombe.png"), bomb, {{"Content-Type", "image/png"}});
+    QCOMPARE(refused.status, 413);
+    QVERIFY(refused.object().value(u"error").toString().contains(QStringLiteral("20000")));
+    QVERIFY(!QFileInfo::exists(env->media() + QStringLiteral("/bombe.png")));
+
+    // Large but plausible PNGs and ordinary JPEGs still go through
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?name=ok.png"), pngHeaderOnly(7000, 5000), {{"Content-Type", "image/png"}}).status, 201);
+    QCOMPARE(env->request("POST", QStringLiteral("/api/media?name=foto.jpg"), jpegBytes(), {{"Content-Type", "image/jpeg"}}).status, 201);
+}
+
+void TestApi::credentialsFixedLocation()
+{
+    // config.json may name another state directory: the password still lives
+    // next to config.json, where makeEnv() put it
+    const auto env = makeEnv({{QStringLiteral("library"), QJsonObject{{QStringLiteral("state"), QStringLiteral("anderswo")}}}});
+    QVERIFY(env);
+    QVERIFY(saveCredentials(credentialsPath(env->path(QStringLiteral("anderswo"))),
+                            Credentials::create(QStringLiteral("admin"), QStringLiteral("untergeschoben"), 1000)));
+
+    QCOMPARE(env->get(QStringLiteral("/api/auth/session")).object().value(u"passwordSet").toBool(), true);
+    QVERIFY(!env->login(QStringLiteral("untergeschoben")));
+    QVERIFY(env->login());
+
+    // A change lands in the fixed place as well
+    QCOMPARE(env->request("POST", QStringLiteral("/api/auth/password"),
+                          jsonBytes({{QStringLiteral("current"), QStringLiteral("geheim123")},
+                                     {QStringLiteral("new"), QStringLiteral("neuesPasswort")}}),
+                          {{"Content-Type", "application/json"}})
+                 .status,
+             204);
+    QVERIFY(loadCredentials(credentialsPathForConfig(env->configPath)).verify(QStringLiteral("admin"), QStringLiteral("neuesPasswort")));
+    QVERIFY(loadCredentials(credentialsPath(env->path(QStringLiteral("anderswo"))))
+                .verify(QStringLiteral("admin"), QStringLiteral("untergeschoben")));
 }
 
 QTEST_GUILESS_MAIN(TestApi)

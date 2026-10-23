@@ -391,6 +391,19 @@ bool Library::generate(const RenditionJob &job, int quality, QString *error)
     const QString relative = renditionPath(job.imageId, job.kind);
     QSize size;
     QString message;
+
+    // Recorded as failed before decoding: a file that crashes the decoder
+    // (or gets the service killed for memory) is not tried again forever
+    {
+        QSqlQuery mark(database());
+        mark.prepare(QStringLiteral("INSERT OR REPLACE INTO renditions (image_id, kind, path, width, height, error) "
+                                    "VALUES (?, ?, '', 0, 0, ?)"));
+        mark.addBindValue(job.imageId);
+        mark.addBindValue(job.kind);
+        mark.addBindValue(QStringLiteral("Abbruch beim Erstellen"));
+        run(mark);
+    }
+
     const bool ok = createRendition(job.source, QDir(m_cacheRoot).filePath(relative), job.kind, quality, &size,
                                     &message);
 
@@ -419,6 +432,9 @@ int Library::imageCount() const
 
 QString renditionFilePath(const QString &cacheRoot, qint64 imageId, const QString &kind)
 {
+    // kind becomes a folder name: only the known ones, never a path
+    if (!isRenditionKind(kind))
+        return {};
     return QDir(cacheRoot).filePath(renditionPath(imageId, kind));
 }
 

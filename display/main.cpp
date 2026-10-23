@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -155,6 +156,8 @@ int main(int argc, char *argv[])
                       << "| max. Textur:" << options.maxTextureSize;
 
     berry::initializeMetadataReading();
+    // A hostile original without rendition must fail to load, not exhaust memory
+    QImageReader::setAllocationLimit(192);
     KioskController controller(options);
 
     const bool windowed = parser.isSet(windowedOption) && !eglfs;

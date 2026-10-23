@@ -5,6 +5,7 @@
 #include "imagemetadata.h"
 #include "library.h"
 #include "mediafiles.h"
+#include "renditions.h"
 #include "state.h"
 
 #include <QBuffer>
@@ -22,6 +23,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QStorageInfo>
+#include <QSysInfo>
 #include <QTcpServer>
 #include <QUrlQuery>
 
@@ -136,6 +138,19 @@ QByteArray sessionCookie(const QString &token, qint64 maxAgeSeconds)
         + QByteArray::number(maxAgeSeconds);
 }
 
+QHttpServerResponse tooManyAttempts(qint64 retryAfterMs)
+{
+    const qint64 seconds = (retryAfterMs + 999) / 1000;
+    QHttpServerResponse response = json(QJsonObject{
+        {QStringLiteral("error"), QStringLiteral("Zu viele Fehlversuche, bitte in %1 s erneut versuchen").arg(seconds)},
+        {QStringLiteral("retryAfter"), seconds},
+    }, Status::TooManyRequests);
+    QHttpHeaders headers = response.headers();
+    headers.append(QHttpHeaders::WellKnownHeader::RetryAfter, QByteArray::number(seconds));
+    response.setHeaders(std::move(headers));
+    return response;
+}
+
 QHttpServerResponse withCookie(QHttpServerResponse response, const QByteArray &cookie)
 {
     QHttpHeaders headers = response.headers();
@@ -222,11 +237,31 @@ berry::Config ApiServer::config() const
 
 Credentials ApiServer::credentials() const
 {
-    return loadCredentials(credentialsPath(config().library().stateDir));
+    return loadCredentials(credentialsPathForConfig(m_configPath));
 }
 
-std::optional<QHttpServerResponse> ApiServer::checkAccess(const QHttpServerRequest &request, bool changes)
+// A web page that rebinds its own domain name to this device (DNS rebinding)
+// sends its own name as Host. Only names this device answers to are accepted.
+bool ApiServer::isAllowedHost(const QHttpServerRequest &request) const
 {
+    const QByteArray header = request.headers().value(QHttpHeaders::WellKnownHeader::Host).toByteArray();
+    QString host = QUrl(QStringLiteral("http://") + QString::fromLatin1(header)).host().toLower();
+    if (host.endsWith(u'.'))
+        host.chop(1);
+    if (host.isEmpty())
+        return false;
+    if (!QHostAddress(host).isNull() || host == u"localhost")
+        return true;
+    const QString machine = QSysInfo::machineHostName().toLower();
+    if (host == machine || host == machine + QStringLiteral(".local"))
+        return true;
+    return config().admin().allowedHosts.contains(host);
+}
+
+std::optional<QHttpServerResponse> ApiServer::checkOrigin(const QHttpServerRequest &request, bool changes) const
+{
+    if (!isAllowedHost(request))
+        return fail(Status::Forbidden, QStringLiteral("Unbekannter Host-Name (admin.allowedHosts)"));
     if (changes) {
         const QHttpHeaders headers = request.headers();
         if (!headers.contains(kCsrfHeader))
@@ -237,6 +272,13 @@ std::optional<QHttpServerResponse> ApiServer::checkAccess(const QHttpServerReque
         if (!origin.isEmpty() && QUrl(QString::fromLatin1(origin)).authority().toLatin1() != host)
             return fail(Status::Forbidden, QStringLiteral("Fremde Herkunft"));
     }
+    return std::nullopt;
+}
+
+std::optional<QHttpServerResponse> ApiServer::checkAccess(const QHttpServerRequest &request, bool changes)
+{
+    if (auto denied = checkOrigin(request, changes))
+        return denied;
 
     const QString token = sessionToken(request);
     if (token.isEmpty() || !m_sessions.validate(token, credentials().stamp()))
@@ -395,6 +437,8 @@ void ApiServer::addRoutes()
 
 QHttpServerResponse ApiServer::session(const QHttpServerRequest &request)
 {
+    if (auto denied = checkOrigin(request, false))
+        return std::move(*denied);
     const Credentials stored = credentials();
     QJsonObject result{{QStringLiteral("authenticated"), false}, {QStringLiteral("passwordSet"), stored.isValid()}};
     const QString token = sessionToken(request);
@@ -409,19 +453,13 @@ QHttpServerResponse ApiServer::session(const QHttpServerRequest &request)
 
 QHttpServerResponse ApiServer::login(const QHttpServerRequest &request)
 {
+    // Before the throttle: cross-site attempts must not lock out the admin
+    if (auto denied = checkOrigin(request, true))
+        return std::move(*denied);
     const QHostAddress address = request.remoteAddress();
     qint64 retryAfterMs = 0;
-    if (!m_throttle.allowed(address, &retryAfterMs)) {
-        const qint64 seconds = (retryAfterMs + 999) / 1000;
-        QHttpServerResponse response = json(QJsonObject{
-            {QStringLiteral("error"), QStringLiteral("Zu viele Fehlversuche, bitte in %1 s erneut versuchen").arg(seconds)},
-            {QStringLiteral("retryAfter"), seconds},
-        }, Status::TooManyRequests);
-        QHttpHeaders headers = response.headers();
-        headers.append(QHttpHeaders::WellKnownHeader::RetryAfter, QByteArray::number(seconds));
-        response.setHeaders(std::move(headers));
-        return response;
-    }
+    if (!m_throttle.allowed(address, &retryAfterMs))
+        return tooManyAttempts(retryAfterMs);
 
     const Credentials stored = credentials();
     if (!stored.isValid()) {
@@ -450,8 +488,8 @@ QHttpServerResponse ApiServer::login(const QHttpServerRequest &request)
 
 QHttpServerResponse ApiServer::logout(const QHttpServerRequest &request)
 {
-    if (!request.headers().contains(kCsrfHeader))
-        return fail(Status::Forbidden, QStringLiteral("Header %1 fehlt").arg(QLatin1String(kCsrfHeader)));
+    if (auto denied = checkOrigin(request, true))
+        return std::move(*denied);
     m_sessions.revoke(sessionToken(request));
     return withCookie(empty(), sessionCookie(QString(), 0));
 }
@@ -599,6 +637,9 @@ QHttpServerResponse ApiServer::mediaFile(qint64 id, const QString &kind)
     if (media.isEmpty())
         return fail(Status::NotFound, QStringLiteral("Bild %1 unbekannt").arg(id));
 
+    // Only names the library produces: anything else would be a path
+    if (!kind.isEmpty() && kind != u"original" && !berry::isRenditionKind(kind))
+        return fail(Status::BadRequest, QStringLiteral("Unbekannte Variante \"%1\"").arg(kind));
     const QString cacheRoot = cfg.library().cacheRoot;
     const QString original = QDir(cfg.mediaRoot()).filePath(media.value(u"path").toString());
     if (kind == u"original")
@@ -638,6 +679,12 @@ QHttpServerResponse ApiServer::upload(const QHttpServerRequest &request)
     const QSize size = QImageReader(&buffer, format).size();
     if (!QByteArrayList{"jpeg", "png", "webp"}.contains(format) || size.isEmpty())
         return fail(Status::UnsupportedMediaType, QStringLiteral("Nur JPEG, PNG und WebP"));
+    // A tiny file can claim gigantic dimensions (decompression bomb). JPEGs
+    // are decoded scaled down, PNG and WebP need all pixels in memory.
+    const qint64 pixels = qint64(size.width()) * size.height();
+    const qint64 maxPixels = format == "jpeg" ? 200'000'000 : 60'000'000;
+    if (pixels > maxPixels)
+        return fail(Status::PayloadTooLarge, QStringLiteral("Bild zu groß: %1 × %2 Pixel").arg(size.width()).arg(size.height()));
 
     const QUrlQuery query = request.query();
     const QString album = query.queryItemValue(QStringLiteral("album"), QUrl::FullyDecoded);
@@ -674,7 +721,7 @@ QHttpServerResponse ApiServer::listAlbums()
 
     // Folders without pictures (yet) are albums too, e.g. right after creating one
     const QDir root(cfg.mediaRoot());
-    QDirIterator it(cfg.mediaRoot(), QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    QDirIterator it(cfg.mediaRoot(), QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString relative = root.relativeFilePath(it.next());
         if (berry::albumDirectory(cfg.mediaRoot(), relative).isEmpty())
@@ -724,6 +771,33 @@ QHttpServerResponse ApiServer::putConfig(const QHttpServerRequest &request)
     if (const QString error = validateConfig(*body); !error.isEmpty())
         return fail(Status::BadRequest, error);
 
+    // Where pictures, library and state live can only be changed on the device
+    // itself: through the API it would open the whole file system.
+    QJsonObject config = *body;
+    const QJsonObject current = berry::readJsonFile(m_configPath);
+    const auto lockPath = [&](const char *section, const char *key) -> QString {
+        const QString name = QLatin1String(section);
+        QJsonObject wanted = config.value(name).toObject();
+        const QJsonValue now = current.value(name).toObject().value(QLatin1String(key));
+        const QJsonValue requested = wanted.value(QLatin1String(key));
+        if (requested.isUndefined()) {
+            if (!now.isUndefined()) {
+                wanted.insert(QLatin1String(key), now);
+                config.insert(name, wanted);
+            }
+            return {};
+        }
+        if (requested != now)
+            return QStringLiteral("%1.%2 lässt sich nur auf dem Gerät selbst ändern").arg(name, QLatin1String(key));
+        return {};
+    };
+    for (const auto &[section, key] : {std::pair{"media", "path"}, std::pair{"library", "database"},
+                                       std::pair{"library", "cache"}, std::pair{"library", "state"},
+                                       std::pair{"library", "trash"}}) {
+        if (const QString error = lockPath(section, key); !error.isEmpty())
+            return fail(Status::BadRequest, error);
+    }
+
     // Keep the previous version, a broken layout is one copy away from undone
     const QString backup = m_configPath + QStringLiteral(".bak");
     if (QFileInfo::exists(m_configPath)) {
@@ -731,7 +805,7 @@ QHttpServerResponse ApiServer::putConfig(const QHttpServerRequest &request)
         QFile::copy(m_configPath, backup);
     }
     QString error;
-    if (!berry::writeJsonFile(m_configPath, *body, &error))
+    if (!berry::writeJsonFile(m_configPath, config, &error))
         return fail(Status::InternalServerError, error);
     qInfo() << "Konfiguration über die Web-API geändert";
     return empty(); // display and library worker watch the file
@@ -766,6 +840,9 @@ QHttpServerResponse ApiServer::changePassword(const QHttpServerRequest &request)
 
     const Credentials stored = credentials();
     const QHostAddress address = request.remoteAddress();
+    qint64 retryAfterMs = 0;
+    if (!m_throttle.allowed(address, &retryAfterMs))
+        return tooManyAttempts(retryAfterMs);
     if (!stored.verify(stored.username, body->value(u"current").toString())) {
         m_throttle.recordFailure(address); // same brake as for the login
         return fail(Status::Forbidden, QStringLiteral("Das aktuelle Passwort ist falsch"));
@@ -777,7 +854,8 @@ QHttpServerResponse ApiServer::changePassword(const QHttpServerRequest &request)
     }
 
     QString error;
-    const QString path = credentialsPath(config().library().stateDir);
+    m_throttle.recordSuccess(address);
+    const QString path = credentialsPathForConfig(m_configPath);
     if (!saveCredentials(path, Credentials::create(stored.username, password), &error))
         return fail(Status::InternalServerError, error);
     // The new hash is a new stamp: every session, this one included, has ended

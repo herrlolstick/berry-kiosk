@@ -97,6 +97,18 @@ QString albumDirectory(const QString &mediaRoot, const QString &album)
     const QString directory = segments.isEmpty() ? root : QDir::cleanPath(root + u'/' + segments.join(u'/'));
     if (directory != root && !directory.startsWith(root + u'/'))
         return {};
+
+    // The name may be fine while an existing folder on the way is a symbolic
+    // link to somewhere else: check where the deepest existing part really is
+    QString existing = directory;
+    while (existing != root && !QFileInfo::exists(existing))
+        existing = QFileInfo(existing).path();
+    if (existing != root) {
+        const QString realRoot = QFileInfo(root).canonicalFilePath();
+        const QString realExisting = QFileInfo(existing).canonicalFilePath();
+        if (realRoot.isEmpty() || !realExisting.startsWith(realRoot + u'/'))
+            return {};
+    }
     return directory;
 }
 

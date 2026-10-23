@@ -134,8 +134,7 @@ ScheduleState evaluateSchedule(const QList<ScheduleRule> &rules, const QDateTime
         if (!rule.matches(when))
             continue;
         state.screenOff = rule.screenOff;
-        if (!rule.screenOff)
-            state.layout = rule.layout;
+        state.layout = rule.screenOff ? QString() : rule.layout;
     }
     return state;
 }

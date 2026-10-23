@@ -11,6 +11,7 @@
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QImageReader>
 #include <QTextStream>
 #include <QThread>
 #include <QTimer>
@@ -58,7 +59,7 @@ int setPassword(const QString &configPath, const QString &username)
         return 1;
     }
 
-    const QString path = credentialsPath(berry::Config::load(configPath).library().stateDir);
+    const QString path = credentialsPathForConfig(configPath);
     QString error;
     if (!saveCredentials(path, Credentials::create(username, password), &error)) {
         err << "Speichern fehlgeschlagen: " << error << Qt::endl;
@@ -100,6 +101,8 @@ int main(int argc, char *argv[])
     qInfo().noquote() << "berry-kiosk-admin" << BERRY_KIOSK_VERSION << "| Konfiguration:" << configPath;
 
     berry::initializeMetadataReading();
+    // Hostile files may claim huge dimensions; failing a read beats the OOM killer
+    QImageReader::setAllocationLimit(192);
 
     // Syncing and rendering may take minutes; the main thread stays free for
     // watching files and serving the web API.
@@ -147,7 +150,7 @@ int main(int argc, char *argv[])
             return 1;
         }
         qInfo().noquote() << QStringLiteral("Verwaltung: http://%1:%2/").arg(settings.address).arg(api->serverPort());
-        if (!loadCredentials(credentialsPath(config.library().stateDir)).isValid())
+        if (!loadCredentials(credentialsPathForConfig(configPath)).isValid())
             qWarning().noquote() << "Noch kein Passwort gesetzt: berry-kiosk-admin --config" << configPath << "--set-password";
         if (config.isPublic() && (settings.address == u"0.0.0.0" || settings.address == u"::"))
             qWarning() << "Profil public: die Verwaltung ist im ganzen Netz erreichbar – admin.address auf 127.0.0.1 setzen oder admin.enabled = false erwägen";

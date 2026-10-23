@@ -58,7 +58,7 @@ void ChangeWatcher::rewatch()
     QStringList dirs{m_configDir, m_stateDir};
     if (QFileInfo(m_mediaRoot).isDir()) {
         dirs.append(m_mediaRoot);
-        QDirIterator it(m_mediaRoot, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        QDirIterator it(m_mediaRoot, QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks, QDirIterator::Subdirectories);
         while (it.hasNext()) {
             const QString dir = it.next();
             if (!it.fileName().startsWith(u'.') && !it.fileName().startsWith(u'@'))

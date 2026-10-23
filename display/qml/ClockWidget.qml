@@ -49,6 +49,7 @@ WidgetPanel {
         minimumPixelSize: 8
         horizontalAlignment: clock.horizontalAlignment
         verticalAlignment: Text.AlignVCenter
+        textFormat: Text.PlainText // the format comes from config.json, never markup
     }
 
     Text {
@@ -66,5 +67,6 @@ WidgetPanel {
         minimumPixelSize: 8
         horizontalAlignment: clock.horizontalAlignment
         verticalAlignment: Text.AlignVCenter
+        textFormat: Text.PlainText // the format comes from config.json, never markup
     }
 }

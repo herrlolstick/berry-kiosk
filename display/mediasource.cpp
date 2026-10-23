@@ -195,7 +195,7 @@ void MediaSource::watch(const QString &directory)
         dirs.append(m_stateDir);
     if (!directory.isEmpty() && QFileInfo(directory).isDir()) {
         dirs.append(directory);
-        QDirIterator it(directory, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        QDirIterator it(directory, QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks, QDirIterator::Subdirectories);
         while (it.hasNext())
             dirs.append(it.next());
     }

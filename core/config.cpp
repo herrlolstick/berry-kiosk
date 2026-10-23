@@ -141,8 +141,13 @@ AdminSettings Config::admin() const
     if (port > 0 && port <= 65535)
         settings.port = quint16(port);
     settings.enabled = admin.value(u"enabled").toBool(true);
+    for (const QJsonValue &host : admin.value(u"allowedHosts").toArray()) {
+        if (host.isString() && !host.toString().trimmed().isEmpty())
+            settings.allowedHosts.append(host.toString().trimmed().toLower());
+    }
+    // Uploads are held in memory; more than this does not fit a small Pi
     const int maxUploadMB = admin.value(u"maxUploadMB").toInt(64);
-    settings.maxUploadBytes = qint64(qBound(1, maxUploadMB, 1024)) * 1024 * 1024;
+    settings.maxUploadBytes = qint64(qBound(1, maxUploadMB, 128)) * 1024 * 1024;
     return settings;
 }
 

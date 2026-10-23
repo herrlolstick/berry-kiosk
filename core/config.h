@@ -40,6 +40,10 @@ struct AdminSettings
     QString address = QStringLiteral("0.0.0.0"); // "0.0.0.0" = every interface, "127.0.0.1" = this device only
     quint16 port = 8080;
     bool enabled = true; // false: no web API at all, the library is still kept up to date
+    // Host names the web UI may be reached by, besides IP addresses, localhost
+    // and this device's name (with and without ".local"). Needed behind a
+    // reverse proxy; everything else is refused (DNS rebinding).
+    QStringList allowedHosts;
     qint64 maxUploadBytes = 64 * 1024 * 1024;
 };
 

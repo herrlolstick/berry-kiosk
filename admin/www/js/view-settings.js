@@ -174,12 +174,12 @@ function librarySection(config) {
   const library = config.library || {};
   const admin = config.admin || {};
   const quality = el('input', { name: 'jpegQuality', type: 'number', min: 50, max: 100, step: 1, value: library.jpegQuality ?? 88, required: true });
-  const upload = el('input', { name: 'maxUploadMB', type: 'number', min: 1, max: 1024, step: 1, value: admin.maxUploadMB ?? 64, required: true });
+  const upload = el('input', { name: 'maxUploadMB', type: 'number', min: 1, max: 128, step: 1, value: admin.maxUploadMB ?? 64, required: true });
   const form = settingsForm([
     el('div', { className: 'full' }, [field('Varianten', select('renditions', RENDITIONS, renditionsToChoice(library.renditions)),
       'Welche Bildgrößen im Hintergrund vorbereitet werden. Automatisch richtet sich nach der Auflösung der Anzeige.')]),
     field('JPEG-Qualität', quality, '50–100, Standard 88'),
-    field('Maximale Upload-Größe (MB)', upload, '1–1024, Standard 64'),
+    field('Maximale Upload-Größe (MB)', upload, '1–128, Standard 64'),
   ], (form) => updateConfig((current) => {
     current.library = {
       ...(current.library || {}),
@@ -188,7 +188,7 @@ function librarySection(config) {
     };
     current.admin = {
       ...(current.admin || {}),
-      maxUploadMB: Math.min(1024, Math.max(1, Math.round(Number(form.maxUploadMB.value)))),
+      maxUploadMB: Math.min(128, Math.max(1, Math.round(Number(form.maxUploadMB.value)))),
     };
   }));
   return section('Mediathek', null, form);

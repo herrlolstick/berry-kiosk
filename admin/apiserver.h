@@ -44,6 +44,9 @@ private:
     Credentials credentials() const;
     // An error response when the request may not pass, otherwise nothing
     std::optional<QHttpServerResponse> checkAccess(const QHttpServerRequest &request, bool changes);
+    // Host name check, plus CSRF header and Origin for requests that change something
+    std::optional<QHttpServerResponse> checkOrigin(const QHttpServerRequest &request, bool changes) const;
+    bool isAllowedHost(const QHttpServerRequest &request) const;
 
     QHttpServerResponse login(const QHttpServerRequest &request);
     QHttpServerResponse logout(const QHttpServerRequest &request);

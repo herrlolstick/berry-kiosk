@@ -1,5 +1,6 @@
 #include "config.h"
 #include "imagemetadata.h"
+#include "imagescanner.h"
 #include "library.h"
 #include "mediafiles.h"
 #include "renditions.h"
@@ -85,6 +86,10 @@ private slots:
     void syncDetectsMoves();
     void movedAlbumKeepsRenditions();
     void renamedOrChangedFilesAreNotMoves();
+    void renditionFilePathOnlyKnownKinds();
+    void scanIgnoresSymlinks();
+    void albumDirectoryRejectsSymlinkEscape();
+    void failedRenditionIsRecordedAndRetriedAfterSuccess();
 };
 
 void TestLibrary::initTestCase()
@@ -485,6 +490,132 @@ void TestLibrary::renamedOrChangedFilesAreNotMoves()
     QCOMPARE(result.added, 1);
     QCOMPARE(result.removed, 1);
     QVERIFY(idsByPath(database, media, cache).value(QStringLiteral("anders/c.jpg")) != before.value(QStringLiteral("c.jpg")));
+}
+
+void TestLibrary::renditionFilePathOnlyKnownKinds()
+{
+    const QString cache = QStringLiteral("/srv/kiosk/cache");
+    QCOMPARE(renditionFilePath(cache, 7, QStringLiteral("thumb")), QStringLiteral("/srv/kiosk/cache/thumb/7.jpg"));
+    QCOMPARE(renditionFilePath(cache, 7, QStringLiteral("1080p")), QStringLiteral("/srv/kiosk/cache/1080p/7.jpg"));
+    QCOMPARE(renditionFilePath(cache, 7, QStringLiteral("2160p")), QStringLiteral("/srv/kiosk/cache/2160p/7.jpg"));
+    // The kind becomes a folder name: never a path
+    QCOMPARE(renditionFilePath(cache, 7, QStringLiteral("../x")), QString());
+    QCOMPARE(renditionFilePath(cache, 7, QStringLiteral("../../etc")), QString());
+    QCOMPARE(renditionFilePath(cache, 7, QStringLiteral("/etc")), QString());
+    QCOMPARE(renditionFilePath(cache, 7, QStringLiteral("foo")), QString());
+    QCOMPARE(renditionFilePath(cache, 7, QStringLiteral("original")), QString());
+    QCOMPARE(renditionFilePath(cache, 7, QString()), QString());
+}
+
+void TestLibrary::scanIgnoresSymlinks()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString media = dir.filePath(QStringLiteral("media"));
+    const QString outside = dir.filePath(QStringLiteral("draussen"));
+    writeImage(media + QStringLiteral("/a.jpg"), QSize(40, 30));
+    writeImage(outside + QStringLiteral("/geheim.jpg"), QSize(40, 30));
+    writeImage(outside + QStringLiteral("/ordner/b.jpg"), QSize(40, 30));
+
+    // A linked file and a linked folder inside the media folder, both leading out of it
+    QVERIFY(QFile::link(outside + QStringLiteral("/geheim.jpg"), media + QStringLiteral("/link.jpg")));
+    QVERIFY(QFile::link(outside + QStringLiteral("/ordner"), media + QStringLiteral("/linkordner")));
+
+    QStringList found = scanImages(media);
+    for (QString &path : found)
+        path = QDir(media).relativeFilePath(path);
+    QCOMPARE(found, QStringList{QStringLiteral("a.jpg")});
+
+    Library library(dir.filePath(QStringLiteral("library.db")), media, dir.filePath(QStringLiteral("cache")));
+    QVERIFY(library.open());
+    QCOMPARE(library.sync().added, 1);
+    QCOMPARE(library.imageCount(), 1);
+}
+
+void TestLibrary::albumDirectoryRejectsSymlinkEscape()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString media = dir.filePath(QStringLiteral("media"));
+    const QString outside = dir.filePath(QStringLiteral("draussen"));
+    QVERIFY(QDir().mkpath(media + QStringLiteral("/echt/unter")));
+    QVERIFY(QDir().mkpath(outside + QStringLiteral("/tief")));
+    QVERIFY(QFile::link(outside, media + QStringLiteral("/fluchtweg")));
+    // A link that stays inside the media folder is harmless
+    QVERIFY(QFile::link(media + QStringLiteral("/echt"), media + QStringLiteral("/verweis")));
+
+    // The names are fine, but the existing part of the way leads outside
+    QCOMPARE(albumDirectory(media, QStringLiteral("fluchtweg")), QString());
+    QCOMPARE(albumDirectory(media, QStringLiteral("fluchtweg/tief")), QString());
+    QCOMPARE(albumDirectory(media, QStringLiteral("fluchtweg/neu/noch-tiefer")), QString());
+
+    QCOMPARE(albumDirectory(media, QString()), QDir::cleanPath(media));
+    QCOMPARE(albumDirectory(media, QStringLiteral("echt/unter")), QDir::cleanPath(media + QStringLiteral("/echt/unter")));
+    QCOMPARE(albumDirectory(media, QStringLiteral("echt/neu/tiefer")),
+             QDir::cleanPath(media + QStringLiteral("/echt/neu/tiefer")));
+    QCOMPARE(albumDirectory(media, QStringLiteral("ganz/neu")), QDir::cleanPath(media + QStringLiteral("/ganz/neu")));
+    QCOMPARE(albumDirectory(media, QStringLiteral("verweis/unter")), QDir::cleanPath(media + QStringLiteral("/verweis/unter")));
+}
+
+void TestLibrary::failedRenditionIsRecordedAndRetriedAfterSuccess()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString media = dir.filePath(QStringLiteral("media"));
+    const QString database = dir.filePath(QStringLiteral("library.db"));
+    const QString cache = dir.filePath(QStringLiteral("cache"));
+    const QString image = media + QStringLiteral("/bild.jpg");
+    writeImage(image, QSize(80, 60));
+
+    Library library(database, media, cache);
+    QVERIFY(library.open());
+    QCOMPARE(library.sync().added, 1);
+    const QStringList kinds{QStringLiteral("thumb")};
+    const QList<RenditionJob> jobs = library.pendingRenditions(kinds, 10);
+    QCOMPARE(jobs.size(), 1);
+
+    const auto row = [&database](qint64 id, QString *path, QVariant *error) {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("probe"));
+        db.setDatabaseName(database);
+        bool found = false;
+        if (db.open()) {
+            QSqlQuery query(db);
+            query.prepare(QStringLiteral("SELECT path, error FROM renditions WHERE image_id = ? AND kind = 'thumb'"));
+            query.addBindValue(id);
+            if (query.exec() && query.next()) {
+                *path = query.value(0).toString();
+                *error = query.value(1);
+                found = true;
+            }
+        }
+        db = QSqlDatabase();
+        QSqlDatabase::removeDatabase(QStringLiteral("probe"));
+        return found;
+    };
+
+    // The file turns bad after the sync: generating fails and is recorded
+    QFile bad(image);
+    QVERIFY(bad.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    bad.write("kein Bild mehr");
+    bad.close();
+    QString error;
+    QVERIFY(!library.generate(jobs.first(), 80, &error));
+    QVERIFY(!error.isEmpty());
+    QString path;
+    QVariant recorded;
+    QVERIFY(row(jobs.first().imageId, &path, &recorded));
+    QCOMPARE(path, QString());
+    QVERIFY(!recorded.isNull());
+    QVERIFY(!recorded.toString().isEmpty());
+    QCOMPARE(library.pendingCount(kinds), 0); // not retried in a loop
+
+    // Once the file is fine again, a successful run replaces the failure
+    writeImage(image, QSize(80, 60));
+    QVERIFY2(library.generate(jobs.first(), 80, &error), qPrintable(error));
+    QVERIFY(row(jobs.first().imageId, &path, &recorded));
+    QCOMPARE(path, QStringLiteral("thumb/%1.jpg").arg(jobs.first().imageId));
+    QVERIFY(recorded.isNull());
+    QVERIFY(QFileInfo::exists(renditionFilePath(cache, jobs.first().imageId, QStringLiteral("thumb"))));
 }
 
 QTEST_GUILESS_MAIN(TestLibrary)

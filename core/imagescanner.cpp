@@ -33,7 +33,7 @@ QStringList scanImages(const QString &directory)
         return {};
 
     QStringList files;
-    QDirIterator it(root.absolutePath(), QDir::Files | QDir::Readable, QDirIterator::Subdirectories);
+    QDirIterator it(root.absolutePath(), QDir::Files | QDir::Readable | QDir::NoSymLinks, QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString path = it.next();
         if (!isSupportedImage(path))

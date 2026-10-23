@@ -119,3 +119,24 @@ npm-Abhängigkeiten. Ausgeliefert vom Admin-Server:
   `js/layout-model.js`, `js/layout-quotes.js`)
 - **Zeitplan** – Regeln je Wochentag und Uhrzeit: welches Layout, wann der Bildschirm aus ist
 - Übersicht mit Schalter „Bildschirm an/aus“; Profil `home`/`public` über `config.json`
+
+## Sicherheit (Stand 1.0)
+
+Ein abschließendes Review mit mehreren unabhängigen Prüfern und Gegenprüfern hat
+zu diesen Grundsätzen geführt:
+
+- **Vertrauensgrenze:** Wer angemeldet ist, verwaltet Inhalte – mehr nicht. Die
+  Datenpfade (`media.path`, `library.*`) und der Ort von `auth.json` lassen sich
+  über die API nicht ändern; Befehle zum Abschalten des Bildschirms sind fest
+  einkompiliert.
+- **Web:** Sitzungs-Cookie `HttpOnly`/`SameSite=Strict`, CSRF-Header plus
+  Origin-Prüfung (auch beim Login), Host-Allowlist gegen DNS-Rebinding, strenge
+  CSP ohne Inline-Code, Login-Bremse je Adresse bzw. IPv6-/64 und global.
+- **Dateien:** Pfade werden lexikalisch und kanonisch geprüft, Symlinks im
+  Bilderordner werden nie verfolgt, Löschen landet im Papierkorb.
+- **Ressourcen:** Pixel-Obergrenzen beim Upload, globales Decode-Limit (192 MB),
+  ein abgebrochener Decode wird als Fehler vermerkt statt endlos wiederholt,
+  Admin-Dienst per systemd auf 256 MB begrenzt.
+- **System:** zwei unprivilegierte Dienste mit systemd-Härtung, Datenordner per
+  systemd-tmpfiles (kein root auf Pfaden des Dienstbenutzers), CI-Actions auf
+  Commits gepinnt, Release-Schreibrecht nur im Release-Job.

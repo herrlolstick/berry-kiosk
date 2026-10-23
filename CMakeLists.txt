@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(berry-kiosk
-    VERSION 0.1.0
+    VERSION 1.0.0
     DESCRIPTION "Bilderrahmen und Kiosk-Anzeige für den Raspberry Pi"
     LANGUAGES CXX)
 
@@ -45,6 +45,7 @@ foreach(unit berry-kiosk-display berry-kiosk-admin)
     install(FILES ${CMAKE_BINARY_DIR}/packaging/${unit}.service DESTINATION ${BERRY_UNIT_DIR})
 endforeach()
 install(FILES packaging/udev/99-berry-kiosk-hotplug.rules DESTINATION lib/udev/rules.d)
+install(FILES packaging/tmpfiles/berry-kiosk.conf DESTINATION lib/tmpfiles.d)
 install(FILES config.example.json DESTINATION ${CMAKE_INSTALL_DATADIR}/berry-kiosk)
 
 set(CPACK_PACKAGE_NAME berry-kiosk)

@@ -545,8 +545,6 @@ void TestCore::scheduleEvaluate()
     // Screen off wins over the day layout
     const ScheduleState lateEvening = evaluateSchedule(rules, at(3, QStringLiteral("22:30")));
     QVERIFY(lateEvening.screenOff);
-    QEXPECT_FAIL("", "evaluateSchedule() keeps the layout of an earlier matching rule when a later "
-                     "rule switches the screen off (harmless: nothing is shown while the screen is off)", Continue);
     QCOMPARE(lateEvening.layout, QString());
     // Only the screen-off rule applies at night
     QCOMPARE(evaluateSchedule(rules, at(4, QStringLiteral("03:00"))), (ScheduleState{QString(), true}));

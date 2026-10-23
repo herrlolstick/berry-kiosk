@@ -35,6 +35,9 @@ struct Credentials
 };
 
 QString credentialsPath(const QString &stateDir);
+// Always <directory of config.json>/state/auth.json: the location must not
+// depend on anything the web API can change
+QString credentialsPathForConfig(const QString &configPath);
 Credentials loadCredentials(const QString &path);
 bool saveCredentials(const QString &path, const Credentials &credentials, QString *error = nullptr);
 
@@ -70,7 +73,9 @@ private:
 class LoginThrottle
 {
 public:
-    explicit LoginThrottle(int freeAttempts = 5, qint64 firstDelayMs = 30000, qint64 maxDelayMs = 15 * 60 * 1000);
+    explicit LoginThrottle(int freeAttempts = 5, qint64 firstDelayMs = 30000, qint64 maxDelayMs = 15 * 60 * 1000,
+                           int globalFailures = 30, qint64 globalWindowMs = 10 * 60 * 1000,
+                           qint64 globalDelayMs = 60 * 1000);
 
     // False while the address has to wait; retryAfterMs tells how long
     bool allowed(const QHostAddress &address, qint64 *retryAfterMs = nullptr) const;
@@ -84,9 +89,16 @@ private:
         QDeadlineTimer blockedUntil;
     };
     static QString key(const QHostAddress &address);
+    void prune();
 
     QHash<QString, Entry> m_entries;
     int m_freeAttempts;
     qint64 m_firstDelayMs;
     qint64 m_maxDelayMs;
+    // Across all addresses, so rotating IPv6 addresses does not help
+    QList<QDeadlineTimer> m_recentFailures; // each expires after the window
+    int m_globalFailures;
+    qint64 m_globalWindowMs;
+    qint64 m_globalDelayMs;
+    QDeadlineTimer m_globalBlockedUntil;
 };

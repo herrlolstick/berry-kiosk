@@ -17,6 +17,13 @@ ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/berry-kiosk-admin --config /var/lib/berry-
 Restart=on-failure
 RestartSec=5
 
+# Uploads and request bodies are held in memory. If that ever gets out of
+# hand, only this service is throttled or killed (and restarted), never the
+# display: important on a Pi Zero 2 W with 512 MB.
+MemoryHigh=160M
+MemoryMax=256M
+OOMScoreAdjust=500
+
 # Rendering pictures must never make the slideshow stutter
 Nice=10
 IOSchedulingClass=idle

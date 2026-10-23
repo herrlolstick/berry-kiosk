@@ -12,7 +12,8 @@ QString sanitizeFileName(const QString &name, const QByteArray &format);
 
 // Absolute folder of an album ("reisen/norwegen") below mediaRoot; mediaRoot
 // itself for an empty album. Empty when the album would leave mediaRoot or
-// touch hidden folders (".x", "@eaDir").
+// touch hidden folders (".x", "@eaDir"), or when an existing folder on the
+// way is a symbolic link leading out of mediaRoot.
 QString albumDirectory(const QString &mediaRoot, const QString &album);
 
 // directory/fileName, or "name (2).jpg", "name (3).jpg" … when taken

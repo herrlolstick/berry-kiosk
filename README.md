@@ -5,10 +5,10 @@ photography in a living room or a public space. It runs without a desktop,
 straight on the screen (Qt Quick via eglfs/KMS), works on low-cost boards like
 the Pi Zero 2 W and uses 4K wherever the screen and the Pi can handle it.
 
-> **Status:** milestone 8 – slideshow with transitions, widgets, media library,
-> image pipeline, admin web API, the web UI incl. the layout editor, and operations
-> (schedule, screen off, public profile, watchdog, HDMI hotplug). Packaging is next,
-> see the [roadmap](#roadmap).
+> **Status:** 1.0 – slideshow with transitions, widgets, media library, image
+> pipeline, admin web API, the web UI incl. the layout editor, operations
+> (schedule, screen off, public profile, watchdog, HDMI hotplug) and a Debian
+> package for Raspberry Pi OS. Not yet tested on every Pi model – feedback welcome.
 
 ## Features
 
@@ -125,14 +125,33 @@ Changing it ends all sessions. The install script asks for it on first install.
   after a restart of the service you log in again.
 - Requests that change something need the header `X-Berry-Kiosk: 1`; together
   with `SameSite` this shuts out cross-site requests (CSRF).
-- After 5 failed logins from one address, the wait doubles with every further
-  failure, from 30 seconds up to 15 minutes.
+- After 5 failed logins from one address (IPv6: one /64 network), the wait doubles
+  with every further failure, from 30 seconds up to 15 minutes. More than 30 failed
+  logins within 10 minutes from anywhere pause all logins for a minute. Changing the
+  password counts the same way. Behind a reverse proxy all clients share one address.
+- The web UI only answers to IP addresses, `localhost` and the device's own name
+  (`<name>` and `<name>.local`); other host names are refused, which stops DNS
+  rebinding attacks. Behind a reverse proxy with its own name, add that name to
+  `admin.allowedHosts`.
+- The locations of pictures, library, cache, state and trash (`media.path`,
+  `library.*`) cannot be changed through the API, only in `config.json` on the
+  device; the password always lives in `state/auth.json` next to `config.json`.
+- Symbolic links inside the media folder are ignored, and nothing is ever written
+  through one. `media.path` itself may point anywhere, e.g. to a NAS mount.
+- Uploads are checked by content and size (at most 200 megapixels for JPEG,
+  60 for PNG/WebP); every image decode is capped at 192 MB, so hostile files fail
+  instead of exhausting the Pi's memory.
 - It speaks plain HTTP and is meant for the home network. For anything else, put
   it behind a TLS reverse proxy (e.g. on a NAS or Umbrel) and set `admin.address`
   to `127.0.0.1`, or firewall the port.
 - Request bodies are held in memory (up to `admin.maxUploadMB`), so do not expose
-  the port to untrusted networks. The display is a separate process and keeps
-  running even if the admin service is overloaded.
+  the port to untrusted networks. The admin service is capped at 256 MB by systemd
+  and is the first to be stopped when memory runs out; the display is a separate
+  process and keeps running.
+- Both services run as the unprivileged user `berry-kiosk` with systemd hardening.
+  The display gets the GPU (`video`, `render`) but no input devices; for a touch
+  screen or keyboard add them with `sudo systemctl edit berry-kiosk-display`:
+  `[Service]` `SupplementaryGroups=video render input`.
 
 ### How changes are stored
 
@@ -227,24 +246,35 @@ build/admin/berry-kiosk-admin --config config.json --set-password
 
 Requires **Raspberry Pi OS Lite, 64-bit, based on Debian 13 "trixie"** (Qt ≥ 6.8 for Qt HttpServer).
 
+**From a release** (fastest): download `berry-kiosk_<version>_arm64.deb` from the
+[releases](https://github.com/herrlolstick/berry-kiosk/releases) and run
+
+```bash
+sudo apt install ./berry-kiosk_1.0.0_arm64.deb
+sudo -u berry-kiosk berry-kiosk-admin --config /var/lib/berry-kiosk/config.json --set-password
+```
+
+**From source**: the install script builds the same package on the Pi and installs it.
+
 ```bash
 git clone https://github.com/herrlolstick/berry-kiosk.git
 cd berry-kiosk
 ./scripts/install-pi.sh
 ```
 
-The script builds on the Pi, creates the system user `berry-kiosk`, copies the
-example configuration to `/var/lib/berry-kiosk/config.json` and starts the
-services `berry-kiosk-display` and `berry-kiosk-admin`. On first install it asks
-for the admin password; the web UI is then at `http://<pi>.local:8080/`.
-Pictures go into `/var/lib/berry-kiosk/media/` – copied in, or uploaded via the web.
+The package creates the system user `berry-kiosk`, the data directory
+`/var/lib/berry-kiosk` (via systemd-tmpfiles) with the example configuration,
+installs the udev rule and starts the services `berry-kiosk-display` and
+`berry-kiosk-admin`. The web UI is then at `http://<pi>.local:8080/`. Pictures go
+into `/var/lib/berry-kiosk/media/` – copied in, or uploaded via the web. Removing
+the package never deletes pictures, library or settings.
 
 ```bash
 journalctl -u berry-kiosk-display -u berry-kiosk-admin -f     # logs
 sudo systemctl restart berry-kiosk-display
 ```
 
-> Not yet tested on real Pi hardware – feedback welcome.
+> Not yet tested on every Pi model – feedback welcome.
 
 ## Configuration
 
@@ -260,11 +290,12 @@ See [`config.example.json`](config.example.json). Top level:
 | `media.path` | Picture folder, relative to the configuration file or absolute |
 | `library.renditions` | `"auto"` (the display's tier) or a list such as `["1080p", "2160p"]` |
 | `library.jpegQuality` | JPEG quality of renditions, `50` … `100`, default `88` |
-| `library.database`, `library.cache`, `library.state` | Paths, default `library.db`, `cache`, `state` – e.g. put the cache on a USB drive |
+| `library.database`, `library.cache`, `library.state` | Paths, default `library.db`, `cache`, `state` – e.g. put the cache on a USB drive (editable only on the device) |
 | `library.trash` | Where deleted pictures are moved, default `trash` |
 | `admin.address` | `"0.0.0.0"` (every interface) or `"127.0.0.1"` (only the device, e.g. behind a reverse proxy) |
 | `admin.port` | Port of the API and web UI, default `8080` |
-| `admin.maxUploadMB` | Largest upload in MB, default `64` |
+| `admin.maxUploadMB` | Largest upload in MB, `1` … `128`, default `64` |
+| `admin.allowedHosts` | Extra host names the web UI answers to, e.g. `["kiosk.example.org"]` behind a reverse proxy |
 | `admin.enabled` | `false` switches the web API and UI off; the library is still kept up to date. Default `true` |
 | `schedule` | Layouts and screen off by time, see [Schedule](#schedule) |
 | `quotes` | Global quotes: `[{ "text": "…", "author": "…" }]` or plain strings |
@@ -441,7 +472,8 @@ docs/        architecture and planning (German)
 6. ✅ **Web UI II** – layout editor with preview on the kiosk, transition settings, quotes
 7. ✅ **Transitions** – slide, zoom, Ken Burns, mix, blurred backdrop, automatic fallback to fades
 8. ✅ **Operations** – schedule, screen off (CEC/DDC), public profile, read-only root, watchdog, HDMI hotplug
-9. **Distribution** – `.deb` packages and a ready-made SD card image
+9. ✅ **Distribution** – Debian package, release workflow for tags, security review
+10. **Later** – a ready-made SD card image (pi-gen), more widgets (weather, QR code)
 
 ## License
 

@@ -4,11 +4,14 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFileInfo>
 #include <QFile>
 #include <QPasswordDigestor>
 #include <QRandomGenerator>
 
 #include <algorithm>
+
+#include <sys/stat.h>
 
 namespace {
 
@@ -94,6 +97,11 @@ QString credentialsPath(const QString &stateDir)
     return QDir(stateDir).filePath(QStringLiteral("auth.json"));
 }
 
+QString credentialsPathForConfig(const QString &configPath)
+{
+    return credentialsPath(QDir(QFileInfo(configPath).absolutePath()).filePath(QStringLiteral("state")));
+}
+
 Credentials loadCredentials(const QString &path)
 {
     return Credentials::fromJson(berry::readJsonFile(path));
@@ -101,7 +109,11 @@ Credentials loadCredentials(const QString &path)
 
 bool saveCredentials(const QString &path, const Credentials &credentials, QString *error)
 {
-    if (!berry::writeJsonFile(path, credentials.toJson(), error))
+    // Owner-only from the first byte on, not just after a chmod
+    const mode_t previous = ::umask(077);
+    const bool written = berry::writeJsonFile(path, credentials.toJson(), error);
+    ::umask(previous);
+    if (!written)
         return false;
     if (!QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
         if (error)
@@ -155,10 +167,14 @@ void SessionStore::prune()
     m_sessions.removeIf([](QHash<QString, Session>::iterator it) { return it.value().expires.hasExpired(); });
 }
 
-LoginThrottle::LoginThrottle(int freeAttempts, qint64 firstDelayMs, qint64 maxDelayMs)
+LoginThrottle::LoginThrottle(int freeAttempts, qint64 firstDelayMs, qint64 maxDelayMs, int globalFailures,
+                             qint64 globalWindowMs, qint64 globalDelayMs)
     : m_freeAttempts(freeAttempts)
     , m_firstDelayMs(firstDelayMs)
     , m_maxDelayMs(maxDelayMs)
+    , m_globalFailures(globalFailures)
+    , m_globalWindowMs(globalWindowMs)
+    , m_globalDelayMs(globalDelayMs)
 {
 }
 
@@ -167,21 +183,31 @@ QString LoginThrottle::key(const QHostAddress &address)
     // "::ffff:192.168.1.5" and "192.168.1.5" are the same client
     bool isV4 = false;
     const quint32 v4 = address.toIPv4Address(&isV4);
-    return isV4 ? QHostAddress(v4).toString() : address.toString();
+    if (isV4)
+        return QHostAddress(v4).toString();
+    // An IPv6 client can use any address of its /64, so the /64 is the client
+    Q_IPV6ADDR v6 = address.toIPv6Address();
+    for (int i = 8; i < 16; ++i)
+        v6[i] = 0;
+    return QHostAddress(v6).toString() + QStringLiteral("/64");
 }
 
 bool LoginThrottle::allowed(const QHostAddress &address, qint64 *retryAfterMs) const
 {
+    QDeadlineTimer until = m_globalBlockedUntil;
     const auto it = m_entries.constFind(key(address));
-    if (it == m_entries.cend() || it->blockedUntil.hasExpired())
+    if (it != m_entries.cend() && it->blockedUntil > until)
+        until = it->blockedUntil;
+    if (until.hasExpired())
         return true;
     if (retryAfterMs)
-        *retryAfterMs = it->blockedUntil.remainingTime();
+        *retryAfterMs = until.remainingTime();
     return false;
 }
 
 void LoginThrottle::recordFailure(const QHostAddress &address)
 {
+    prune();
     Entry &entry = m_entries[key(address)];
     ++entry.failures;
     if (entry.failures >= m_freeAttempts) {
@@ -189,9 +215,24 @@ void LoginThrottle::recordFailure(const QHostAddress &address)
         const qint64 delay = qMin(m_maxDelayMs, m_firstDelayMs << doublings);
         entry.blockedUntil = QDeadlineTimer(delay);
     }
+
+    m_recentFailures.append(QDeadlineTimer(m_globalWindowMs));
+    if (m_recentFailures.size() >= m_globalFailures)
+        m_globalBlockedUntil = QDeadlineTimer(m_globalDelayMs);
 }
 
 void LoginThrottle::recordSuccess(const QHostAddress &address)
 {
     m_entries.remove(key(address));
+}
+
+void LoginThrottle::prune()
+{
+    m_recentFailures.removeIf([](const QDeadlineTimer &timer) { return timer.hasExpired(); });
+    // Forget addresses that stopped trying long ago, so the table stays small
+    if (m_entries.size() > 256) {
+        m_entries.removeIf([this](QHash<QString, Entry>::iterator it) {
+            return it.value().blockedUntil.hasExpired() && it.value().failures < m_freeAttempts;
+        });
+    }
 }

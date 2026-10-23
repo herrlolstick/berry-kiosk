@@ -14,7 +14,11 @@ NotifyAccess=main
 WatchdogSec=30
 User=berry-kiosk
 Group=berry-kiosk
-SupplementaryGroups=video render input
+# GPU only. A kiosk needs no keyboard; for touch screens or keyboards add
+# input with a drop-in (systemctl edit berry-kiosk-display):
+#   [Service]
+#   SupplementaryGroups=video render input
+SupplementaryGroups=video render
 StateDirectory=berry-kiosk
 StateDirectoryMode=0750
 RuntimeDirectory=berry-kiosk
@@ -29,6 +33,8 @@ ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/berry-kiosk-display --config /var/lib/berr
 # Also used on purpose: the display exits when the screen mode has to change
 Restart=always
 RestartSec=2
+# When memory runs out, the kernel should pick anything but the slideshow
+OOMScoreAdjust=-200
 
 # Hardening. The display needs the GPU, input devices and (for CEC/DDC) a
 # few device nodes, so devices stay visible; everything else is locked down.

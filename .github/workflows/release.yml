@@ -7,15 +7,20 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   deb-arm64:
     name: Paket für Raspberry Pi OS (arm64)
+    # Only this job may create the release
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04-arm
     container: debian:trixie
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Pakete installieren
         run: |
@@ -48,7 +53,7 @@ jobs:
           cd build && cpack -G DEB
           sha256sum berry-kiosk_*.deb > SHA256SUMS
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             build/berry-kiosk_*.deb

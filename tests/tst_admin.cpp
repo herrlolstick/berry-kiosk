@@ -13,6 +13,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QLocalServer>
 #include <QLocalSocket>
@@ -24,6 +25,8 @@
 #include <QThread>
 
 #include <atomic>
+
+#include <sys/stat.h>
 
 using namespace berry;
 
@@ -108,6 +111,10 @@ private slots:
     void sessions();
     void sessionExpiry();
     void loginThrottle();
+    void loginThrottleIpv6Prefix();
+    void loginThrottleGlobalBudget();
+    void credentialsPathForConfig();
+    void credentialsIgnoreUmask();
     void sanitizeFileName_data();
     void sanitizeFileName();
     void sanitizeFileNameLength();
@@ -604,7 +611,17 @@ void TestAdmin::adminSettings()
     QCOMPARE(admin({{QStringLiteral("address"), QStringLiteral("  ")}}).address, QStringLiteral("0.0.0.0"));
     QCOMPARE(admin({{QStringLiteral("port"), 0}}).port, quint16(8080));
     QCOMPARE(admin({{QStringLiteral("port"), 70000}}).port, quint16(8080));
-    QCOMPARE(admin({{QStringLiteral("maxUploadMB"), 5000}}).maxUploadBytes, qint64(1024) * 1024 * 1024);
+    // Uploads live in memory: at most 128 MiB, whatever config.json says
+    QCOMPARE(admin({{QStringLiteral("maxUploadMB"), 5000}}).maxUploadBytes, qint64(128) * 1024 * 1024);
+    QCOMPARE(admin({{QStringLiteral("maxUploadMB"), 128}}).maxUploadBytes, qint64(128) * 1024 * 1024);
+    QCOMPARE(admin({{QStringLiteral("maxUploadMB"), 129}}).maxUploadBytes, qint64(128) * 1024 * 1024);
+
+    // Extra host names, lower-cased, empty and non-string entries dropped
+    QVERIFY(admin({}).allowedHosts.isEmpty());
+    QCOMPARE(admin({{QStringLiteral("allowedHosts"),
+                     QJsonArray{QStringLiteral("Kiosk.Example"), QStringLiteral(" "), 42, QStringLiteral(" foto.lan ")}}})
+                 .allowedHosts,
+             (QStringList{QStringLiteral("kiosk.example"), QStringLiteral("foto.lan")}));
     QCOMPARE(admin({{QStringLiteral("maxUploadMB"), 0}}).maxUploadBytes, qint64(1) * 1024 * 1024);
 }
 
@@ -672,6 +689,79 @@ void TestAdmin::displayLink()
     error.clear();
     QVERIFY(!link.request(QStringLiteral("status"), {}, 2000, &error).isEmpty());
     QVERIFY2(error.isEmpty(), qPrintable(error));
+}
+
+void TestAdmin::loginThrottleIpv6Prefix()
+{
+    LoginThrottle throttle(2, 60000, 60000);
+    const QHostAddress first(QStringLiteral("2001:db8:1:2::1"));
+    const QHostAddress second(QStringLiteral("2001:db8:1:2:abcd::99"));
+    const QHostAddress sameNetwork(QStringLiteral("2001:db8:1:2:ffff:ffff:ffff:ffff"));
+    const QHostAddress otherNetwork(QStringLiteral("2001:db8:1:3::1"));
+
+    // Two addresses of one /64 are one client: their failures add up
+    throttle.recordFailure(first);
+    QVERIFY(throttle.allowed(second));
+    throttle.recordFailure(second);
+    qint64 retryAfter = 0;
+    QVERIFY(!throttle.allowed(first, &retryAfter));
+    QVERIFY(retryAfter > 0);
+    QVERIFY(!throttle.allowed(second));
+    QVERIFY(!throttle.allowed(sameNetwork));
+    // The neighbouring /64 is somebody else
+    QVERIFY(throttle.allowed(otherNetwork));
+
+    // A success from any address of the /64 clears it
+    throttle.recordSuccess(sameNetwork);
+    QVERIFY(throttle.allowed(first));
+}
+
+void TestAdmin::loginThrottleGlobalBudget()
+{
+    // Per address practically unlimited, but 5 failures overall block everyone for 300 ms
+    LoginThrottle throttle(100, 60000, 60000, 5, 60000, 300);
+    for (int i = 1; i <= 4; ++i)
+        throttle.recordFailure(QHostAddress(QStringLiteral("192.168.1.%1").arg(i)));
+    const QHostAddress fresh(QStringLiteral("192.168.1.200"));
+    QVERIFY(throttle.allowed(fresh));
+
+    throttle.recordFailure(QHostAddress(QStringLiteral("2001:db8:7::1")));
+    qint64 retryAfter = 0;
+    QVERIFY(!throttle.allowed(fresh, &retryAfter));
+    QVERIFY(retryAfter > 0);
+    QVERIFY(retryAfter <= 300);
+    QVERIFY(!throttle.allowed(QHostAddress(QStringLiteral("10.0.0.1"))));
+
+    QTRY_VERIFY_WITH_TIMEOUT(throttle.allowed(fresh), 2000);
+    QVERIFY(throttle.allowed(QHostAddress(QStringLiteral("192.168.1.1"))));
+}
+
+void TestAdmin::credentialsPathForConfig()
+{
+    QCOMPARE(::credentialsPathForConfig(QStringLiteral("/x/y/config.json")), QStringLiteral("/x/y/state/auth.json"));
+    QCOMPARE(::credentialsPathForConfig(QStringLiteral("/var/lib/berry-kiosk/config.json")),
+             QStringLiteral("/var/lib/berry-kiosk/state/auth.json"));
+}
+
+void TestAdmin::credentialsIgnoreUmask()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("state/auth.json"));
+
+    // As with "sudo -u berry-kiosk ... --set-password" from a shell with umask 022
+    const mode_t previous = ::umask(022);
+    const auto restore = qScopeGuard([previous] { ::umask(previous); });
+    QVERIFY(saveCredentials(path, Credentials::create(QStringLiteral("admin"), QStringLiteral("geheim123"), 1000)));
+
+    const QFileDevice::Permissions permissions = QFileInfo(path).permissions();
+    const QFileDevice::Permissions others = QFileDevice::ReadGroup | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::WriteOther | QFileDevice::ExeOther;
+    QCOMPARE(permissions & others, QFileDevice::Permissions());
+    QVERIFY(permissions.testFlag(QFileDevice::ReadOwner));
+    QVERIFY(permissions.testFlag(QFileDevice::WriteOwner));
+    // The umask of the process is back to what it was
+    QCOMPARE(::umask(022), mode_t(022));
 }
 
 QTEST_GUILESS_MAIN(TestAdmin)

@@ -269,6 +269,7 @@ Item {
         wrapMode: Text.Wrap
         color: "#888888"
         font.pixelSize: Math.max(14, Math.round(slideshow.height / 30))
+        textFormat: Text.PlainText
         text: qsTr("Keine Bilder in\n%1").arg(media.directory || slideshow.kiosk.mediaRoot)
     }
 }
