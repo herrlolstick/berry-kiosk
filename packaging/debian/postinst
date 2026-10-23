@@ -4,15 +4,22 @@ set -e
 
 STATE=/var/lib/berry-kiosk
 USER=berry-kiosk
+EXAMPLE=/usr/share/berry-kiosk/config.example.json
 
 # Without systemd-tmpfiles (containers): create only what does not exist yet.
 # Existing paths are never touched, so a symlink the service user planted in
-# its own directory cannot redirect root's chown/chmod/copy elsewhere.
+# its own directory cannot redirect root's chown/chmod elsewhere.
 create_dir() {
     if [ ! -e "$1" ] && [ ! -L "$1" ]; then
         mkdir -m "$2" "$1"
         chown -h "$USER:$USER" "$1"
     fi
+}
+
+# Everything inside the data directory runs as the service user, so root
+# never writes to paths that user controls.
+as_user() {
+    runuser -u "$USER" -- "$@"
 }
 
 if [ "$1" = "configure" ]; then
@@ -27,11 +34,16 @@ if [ "$1" = "configure" ]; then
         create_dir "$STATE" 0750
         create_dir "$STATE/media" 2775
         create_dir "$STATE/state" 0700
-        if [ ! -e "$STATE/config.json" ] && [ ! -L "$STATE/config.json" ]; then
-            cp /usr/share/berry-kiosk/config.example.json "$STATE/config.json"
-            chown -h "$USER:$USER" "$STATE/config.json"
-            chmod 0640 "$STATE/config.json"
-        fi
+    fi
+
+    # Example configuration on first install only, never over an existing one
+    if [ ! -e "$STATE/config.json" ] && [ ! -L "$STATE/config.json" ]; then
+        as_user sh -c 'umask 027 && cp "$1" "$2"' sh "$EXAMPLE" "$STATE/config.json"
+    elif [ -f "$STATE/config.json" ] && [ ! -L "$STATE/config.json" ] \
+        && [ "$(stat -c %u "$STATE/config.json")" = 0 ]; then
+        # 1.0.0 left a root-owned copy that the services cannot save. Replace it
+        # with a copy owned by the service user, keeping the content.
+        as_user sh -c 'umask 027 && cp "$1" "$1.new" && mv -f "$1.new" "$1"' sh "$STATE/config.json"
     fi
 
     if command -v udevadm >/dev/null; then

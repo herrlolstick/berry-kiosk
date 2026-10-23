@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(berry-kiosk
-    VERSION 1.0.0
+    VERSION 1.0.1
     DESCRIPTION "Bilderrahmen und Kiosk-Anzeige für den Raspberry Pi"
     LANGUAGES CXX)
 

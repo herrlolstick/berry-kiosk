@@ -250,7 +250,7 @@ Requires **Raspberry Pi OS Lite, 64-bit, based on Debian 13 "trixie"** (Qt ≥ 6
 [releases](https://github.com/herrlolstick/berry-kiosk/releases) and run
 
 ```bash
-sudo apt install ./berry-kiosk_1.0.0_arm64.deb
+sudo apt install ./berry-kiosk_1.0.1_arm64.deb
 sudo -u berry-kiosk berry-kiosk-admin --config /var/lib/berry-kiosk/config.json --set-password
 ```
 

@@ -43,14 +43,31 @@ jobs:
           dpkg-deb --contents berry-kiosk_*.deb
 
       # Installs the package into the container: catches broken dependencies
-      # and maintainer scripts (systemd itself does not run here)
+      # and maintainer scripts. systemd does not run here, but systemd-tmpfiles
+      # is installed so postinst takes the same path as on a Pi.
       - name: Paket installieren
         run: |
+          apt-get install -y systemd
           apt-get install -y ./build/berry-kiosk_*.deb
           id berry-kiosk
-          test -f /var/lib/berry-kiosk/config.json
+          check() { test "$(stat -c '%U:%G %a' "$1")" = "$2" || { stat "$1"; exit 1; }; }
+          check /var/lib/berry-kiosk "berry-kiosk:berry-kiosk 750"
+          check /var/lib/berry-kiosk/media "berry-kiosk:berry-kiosk 2775"
+          check /var/lib/berry-kiosk/state "berry-kiosk:berry-kiosk 700"
+          check /var/lib/berry-kiosk/config.json "berry-kiosk:berry-kiosk 640"
           test -x /usr/bin/berry-kiosk-display && test -x /usr/bin/berry-kiosk-admin
           berry-kiosk-admin --version
+
+      # 1.0.0 left a root-owned config.json behind; postinst must repair it
+      # without losing its content
+      - name: Reparatur einer 1.0.0-Installation
+        run: |
+          cfg=/var/lib/berry-kiosk/config.json
+          echo '{"profile": "public"}' > "$cfg"
+          chown root:root "$cfg" && chmod 0644 "$cfg"
+          dpkg-reconfigure berry-kiosk
+          test "$(stat -c '%U:%G %a' "$cfg")" = "berry-kiosk:berry-kiosk 640"
+          grep -q public "$cfg"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
